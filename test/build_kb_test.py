@@ -5,7 +5,7 @@ from dotenv import find_dotenv, load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 from transformers import AutoTokenizer
-from utils.MarkdownTreeParser import MarkdownTreeParser
+from utils import MarkdownTreeParser, encode_document_for_milvus, decode_document_from_milvus
 
 
 load_dotenv(find_dotenv())
@@ -71,8 +71,10 @@ vector_store = Milvus(
 
 max_batch_size = 10  # 建议略低于 5461
 for i, batch in enumerate(chunk_list(docs, max_batch_size)):
-    for doc in batch:
+    # 编码文档以适应Milvus存储
+    encoded_batch = [encode_document_for_milvus(doc) for doc in batch]
+    for doc in encoded_batch:
         print(doc.metadata)
     print(f"[4.{i + 1}] 正在写入批次 {i + 1}，共 {len(batch)} 条...")
-    vector_store.add_documents(documents=batch)
+    vector_store.add_documents(documents=encoded_batch)
 print("[完成] 文档构建成功！")

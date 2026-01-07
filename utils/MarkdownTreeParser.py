@@ -2,7 +2,7 @@ import os
 import re
 import uuid
 from enum import Enum
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 from queue import PriorityQueue
 
 from langchain_core.documents import Document
@@ -80,7 +80,7 @@ class MarkdownTreeParser:
         root_doc = MarkdownTreeParser._create_document_node(
             content=processed_content.strip(),
             source=file_path,
-            parent_id=None,
+            parent_id='',
             level=0,
             title=file_name,
             token_count=0,
@@ -109,14 +109,14 @@ class MarkdownTreeParser:
             content: str,
             *,
             source: str,
-            parent_id: Optional[str],
+            parent_id: str,
             level: int,
             title: str,
             token_count: int,
             node_type: NodeType = NodeType.LEAF,
             child_ids: List[str] = None,
-            left_sibling: str = None,
-            right_sibling: str = None,
+            left_sibling: str = '',
+            right_sibling: str = '',
             from_split: bool = False,
             merged: bool = False
     ) -> Document:
@@ -522,5 +522,5 @@ class MarkdownTreeParser:
                 child_ids = node.metadata["child_ids"]
                 for i, child_id in enumerate(child_ids):
                     child = id_map[child_id]
-                    child.metadata["left_sibling"] = child_ids[i - 1] if i > 0 else None
-                    child.metadata["right_sibling"] = child_ids[i + 1] if i < len(child_ids) - 1 else None
+                    child.metadata["left_sibling"] = child_ids[i - 1] if i > 0 else ''
+                    child.metadata["right_sibling"] = child_ids[i + 1] if i < len(child_ids) - 1 else ''
