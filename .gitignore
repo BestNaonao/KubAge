@@ -1,0 +1,5 @@
+.env
+.env.*
+/models
+/raw_data
+/.idea
