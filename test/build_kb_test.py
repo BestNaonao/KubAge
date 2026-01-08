@@ -26,19 +26,19 @@ bge_path = "D:/学习资料/毕业设计/KubAge/models/BAAI/bge-large-zh-v1___5"
 
 # 1. 初始化嵌入模型
 embeddings = HuggingFaceEmbeddings(
-    model_name=qwen_path,
+    model_name=bge_path,
     model_kwargs={"device": "cuda", "trust_remote_code": True},
     encode_kwargs={"normalize_embeddings": True}
 )
 
 # 2. 初始化 MarkdownTreeParser
-tokenizer = AutoTokenizer.from_pretrained(qwen_path, trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(bge_path, trust_remote_code=True)
 parser = MarkdownTreeParser(
     embeddings=embeddings,
     tokenizer=tokenizer,
     min_chunk_size=256,
-    core_chunk_size=1024,
-    max_chunk_size=4096
+    core_chunk_size=512,
+    max_chunk_size=1024
 )
 
 # 3. 解析所有 Markdown 文件
@@ -72,10 +72,11 @@ vector_store = Milvus(
 )
 
 
-max_batch_size = 1000  # 建议略低于 5461
+max_batch_size = 10  # 建议略低于 5461
 for i, batch in enumerate(chunk_list(docs, max_batch_size)):
     # 编码文档以适应Milvus存储
     encoded_batch = [encode_document_for_milvus(doc) for doc in batch]
     print(f"[4.{i + 1}] 正在写入批次 {i + 1}，共 {len(batch)} 条...")
     vector_store.add_documents(documents=encoded_batch)
+    torch.cuda.empty_cache()
 print("[完成] 文档构建成功！")

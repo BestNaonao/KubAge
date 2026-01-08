@@ -8,7 +8,7 @@ if not torch.cuda.is_available():
     exit()
 
 print(f"PyTorch版本: {torch.__version__}")
-print(f"是否使用C11ABI编译: {print(torch.compiled_with_cxx11_abi())}")
+print(f"是否使用C11ABI编译: {torch.compiled_with_cxx11_abi()}")
 print(f"CUDA版本: {torch.version.cuda}")
 print(f"GPU型号: {torch.cuda.get_device_name(0)}")
 print(f"当前GPU内存: {torch.cuda.memory_allocated() / 1024 ** 3:.2f} GB")

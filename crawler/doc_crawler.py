@@ -1,6 +1,5 @@
 import logging
 import os
-import re
 import threading
 import time
 import traceback
@@ -14,16 +13,18 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from utils.html2md_utils import convert_to_markdown, get_span_path
+
+
 HEADERS: Dict[str, str] = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
     "Connection": "keep-alive"
 }
 NO_REF_URL: str = "https://kubernetes.io"
-NO_REF_LEN: int = len(NO_REF_URL)
 BASE_URL: str = "https://kubernetes.io/zh-cn/docs/"
 START_URL: str = BASE_URL + "home/"
 ELEMENT_NAME_LIST: List[str] = ['p', 'h1', 'h2', 'h3', 'h4', 'li', 'code']
-EXCLUDE_HREF_PREFIXES = ["/contribute", "/blog", "/training", "/careers", "/partners", "/community"]
+EXCLUDE_HREF_PREFIXES = ["/contribute", "/blog", "/training", "/careers", "/partners", "/community", "/test"]
 REMOVE_TEXT: str = "此页是否对你有帮助"
 
 
@@ -122,96 +123,6 @@ class DocCrawler(object):
                 self.filename_counter[base_name] = 1
                 return base_name
 
-    def get_span_path(self, soup, url: str) -> str:
-        # 尝试找到当前页面的导航路径
-        a_tag = soup.find('a', attrs={'href': url[NO_REF_LEN:]})
-        active_span = a_tag and a_tag.find('span')
-
-        if not active_span:
-            page_name = soup.find('h1', attrs={'data-pagefind-weight': '10'})
-            return page_name.get_text(strip=True).replace('/', '和') if page_name else "unknown"
-
-        path = [active_span.get_text(strip=True).replace('/', '和')]
-        current_li = active_span.find_parent('li')
-
-        while current_li:
-            if not (ul := current_li.find_parent('ul')) or not (parent_li := ul.find_parent('li')):
-                break
-            if not (span := parent_li.select_one('label > a > span')):
-                break
-            # 将层级名称插入路径最前面
-            path.insert(0, span.get_text(strip=True).replace('/', '和'))
-            current_li = parent_li  # 继续向上查找
-
-        return self.get_unique_filename('_'.join(path))
-
-    def convert_to_markdown(self, title: str, main_content) -> str:
-        """将HTML内容转换为Markdown格式"""
-        # 预处理HTML内容
-        # 移除不需要的元素
-        for element in main_content.select('.toolbar, .edit-page-link, .feedback--title, .pagehead'):
-            element.decompose()
-
-        # 提取并处理面包屑导航
-        breadcrumb_nav = main_content.find('nav')
-        breadcrumb_str = ""
-        if breadcrumb_nav:
-            # 提取所有链接文本
-            breadcrumb_items = [a.get_text().strip() for a in breadcrumb_nav.select('ol li a')]
-            # 用" / "连接成字符串
-            breadcrumb_str = " / ".join(breadcrumb_items)
-            # 从DOM中移除<nav>元素
-            breadcrumb_nav.decompose()
-
-        # 创建占位符映射表
-        code_block_placeholders = {}
-
-        # 处理提醒框
-        for i, alert_div in enumerate(main_content.find_all('div', class_=lambda x: x and 'alert ' in x)):
-            alert_class = ' '.join(alert_div.get('class'))
-            alert_text = self.html2text_processor.handle(str(alert_div)).strip()
-            placeholder = f"<!--ALERT_BLOCK_{i}-->"
-            code_block_placeholders[placeholder] = f"\n:::{alert_class}\n{alert_text}\n:::\n"
-            alert_div.replace_with(placeholder)
-
-        # 处理代码块
-        for i, pre in enumerate(main_content.find_all('pre')):
-            code_tag = pre.find('code')
-            if code_tag:
-                # 获取语言类型
-                language = code_tag.get('data-lang', '').strip()
-                lang_tag = language if language else ''
-                # 获取代码文本（保留所有格式）
-                code_text = code_tag.get_text().strip()
-                # 创建占位符
-                placeholder = f"<!--CODE_BLOCK_{i}-->"
-                code_block_placeholders[placeholder] = f"\n```{lang_tag}\n{code_text}\n```\n"
-                # 用占位符替换整个<pre>标签
-                pre.replace_with(placeholder)
-
-        # 添加标题前缀
-        markdown_content = f"# {title}\n\n{breadcrumb_str}\n\n"
-
-        # 转换主要内容
-        with self.lock:
-            markdown_content += self.html2text_processor.handle(str(main_content))
-
-        # 后处理Markdown
-        # 将占位符替换为实际的代码块
-        for placeholder, code_block in code_block_placeholders.items():
-            markdown_content = markdown_content.replace(placeholder, code_block)
-
-        # 修复代码块格式
-        markdown_content = re.sub(r'```\s*\n', '```\n', markdown_content)
-        # 移除多余的水平线
-        markdown_content = re.sub(r'\n-{3,}\n', '\n\n', markdown_content)
-        # 修复表格对齐
-        markdown_content = re.sub(r'\| :--- ', '| :--- | ', markdown_content)
-        # 移除反馈以及后续内容
-        markdown_content = markdown_content.split("## 反馈")[0]
-
-        return markdown_content
-
     def extract_content(self, url):
         doc_name = None
         main_content = None
@@ -223,14 +134,12 @@ class DocCrawler(object):
             soup = BeautifulSoup(response.text, 'lxml')
             # 解析爬取内容，添加新的网页链接，获取文档标题和正文内容
             self.add_new_urls(self.extract_new_urls(soup, url))
-            doc_name = self.get_span_path(soup, url)
-            main_content = soup.find('main')
-            if not main_content:
+            doc_name = self.get_unique_filename(get_span_path(soup, url, NO_REF_URL))
+            markdown_content = convert_to_markdown(soup)
+
+            if not markdown_content:
                 self.logger.warning(f"⚠️ 未找到正文内容: {url}")
                 return
-
-            title = soup.title.string.replace("| Kubernetes", "").strip()
-            markdown_content = self.convert_to_markdown(title, main_content)
 
             # 解析保存的文件名，保存到保存目录路径下
             save_path = os.path.join(self.save_dir, f"{doc_name}.md")

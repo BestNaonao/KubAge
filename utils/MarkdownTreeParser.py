@@ -304,8 +304,9 @@ class MarkdownTreeParser:
 
         # === 步骤1: 使用两种正则表达式切分 ===
         split_patterns = [
-            r'(\n\*\*[^*].*?\n)',  # **标题
-            r'(\n\\--\S.*?\n)',   # \--标题
+            r'(\n\*\*[^*].*?\n)',   # **标题
+            r'(\n\\--\S.*?\n)',     # \--标题
+            r'(\n)(?=`[^`\n]*`[^|\n]*?\|)',     # 用 | 分列的表格
             r'(\n\s{2,}\* \*\*[^*]+?\*\* .*?\n)',    # * **标题
         ]
         pattern_chunks = self._split_by_patterns(original_content, split_patterns, extracted_blocks)

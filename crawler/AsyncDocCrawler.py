@@ -1,22 +1,20 @@
 import asyncio
 import logging
 import os
-import re
 import traceback
 from typing import List, Dict, Set
 from urllib.parse import urljoin
 
-import html2text
 import aiohttp
 from bs4 import BeautifulSoup
+from utils.html2md_utils import convert_to_markdown, get_span_path
 
-# 常量保持不变
+
 HEADERS: Dict[str, str] = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
     "Connection": "keep-alive"
 }
 NO_REF_URL: str = "https://kubernetes.io"
-NO_REF_LEN: int = len(NO_REF_URL)
 BASE_URL: str = "https://kubernetes.io/zh-cn/docs/"
 START_URL: str = BASE_URL + "home/"
 ELEMENT_NAME_LIST: List[str] = ['p', 'h1', 'h2', 'h3', 'h4', 'li', 'code']
@@ -70,80 +68,6 @@ class AsyncDocCrawler:
             counter += 1
         return candidate
 
-    def get_span_path(self, soup, url: str) -> str:
-        # 尝试找到当前页面的导航路径
-        a_tag = soup.find('a', attrs={'href': url[NO_REF_LEN:]})
-        active_span = a_tag and a_tag.find('span')
-
-        if not active_span:
-            page_name = soup.find('h1', attrs={'data-pagefind-weight': '10'})
-            return page_name.get_text(strip=True).replace('/', '和') if page_name else "unknown"
-
-        path = [active_span.get_text(strip=True).replace('/', '和')]
-        current_li = active_span.find_parent('li')
-
-        while current_li:
-            if not (ul := current_li.find_parent('ul')) or not (parent_li := ul.find_parent('li')):
-                break
-            if not (span := parent_li.select_one('label > a > span')):
-                break
-            path.insert(0, span.get_text(strip=True).replace('/', '和'))
-            current_li = parent_li
-
-        return self.get_unique_filename('_'.join(path))
-
-    @staticmethod
-    def convert_to_markdown(title: str, main_content) -> str:
-        """将HTML内容转换为Markdown格式"""
-        html2text_processor = html2text.HTML2Text()
-        html2text_processor.body_width = 0
-        html2text_processor.ignore_links = True
-        html2text_processor.ignore_images = False
-        html2text_processor.ignore_emphasis = False
-        html2text_processor.mark_code = True
-
-        for element in main_content.select('.toolbar, .edit-page-link, .feedback--title, .pagehead'):
-            element.decompose()
-
-        breadcrumb_nav = main_content.find('nav')
-        breadcrumb_str = ""
-        if breadcrumb_nav:
-            breadcrumb_items = [a.get_text().strip() for a in breadcrumb_nav.select('ol li a')]
-            breadcrumb_str = " / ".join(breadcrumb_items)
-            breadcrumb_nav.decompose()
-
-        code_block_placeholders = {}
-
-        for i, alert_div in enumerate(main_content.find_all('div', class_=lambda x: x and 'alert ' in x)):
-            alert_class = ' '.join(alert_div.get('class'))
-            alert_text = html2text_processor.handle(str(alert_div)).strip()
-            placeholder = f"<!--ALERT_BLOCK_{i}-->"
-            code_block_placeholders[placeholder] = f"\n:::{alert_class}\n{alert_text}\n:::\n"
-            alert_div.replace_with(placeholder)
-
-        for i, pre in enumerate(main_content.find_all('pre')):
-            code_tag = pre.find('code')
-            if code_tag:
-                language = code_tag.get('data-lang', '').strip()
-                lang_tag = language if language else ''
-                code_text = code_tag.get_text().strip()
-                placeholder = f"<!--CODE_BLOCK_{i}-->"
-                code_block_placeholders[placeholder] = f"\n```{lang_tag}\n{code_text}\n```\n"
-                pre.replace_with(placeholder)
-
-        markdown_content = f"# {title}\n\n{breadcrumb_str}\n\n"
-        markdown_content += html2text_processor.handle(str(main_content))
-
-        for placeholder, code_block in code_block_placeholders.items():
-            markdown_content = markdown_content.replace(placeholder, code_block)
-
-        markdown_content = re.sub(r'```\s*\n', '```\n', markdown_content)
-        markdown_content = re.sub(r'\n-{3,}\n', '\n\n', markdown_content)
-        markdown_content = re.sub(r'\| :--- ', '| :--- | ', markdown_content)
-        markdown_content = markdown_content.split("## 反馈")[0]
-
-        return markdown_content
-
     async def extract_content(self, session: aiohttp.ClientSession, url: str):
         """提取网页中的内容，包括标题和正文，最后保存"""
         try:
@@ -162,14 +86,12 @@ class AsyncDocCrawler:
                         self.found.add(u)
                         await self.to_visit.put(u)
 
-            doc_name = self.get_span_path(soup, url)
-            main_content = soup.find('main')
-            if not main_content:
+            doc_name = self.get_unique_filename(get_span_path(soup, url, NO_REF_URL))
+            markdown_content = convert_to_markdown(soup)
+
+            if not markdown_content:
                 self.logger.warning(f"⚠️ 未找到正文内容: {url}")
                 return
-
-            title = soup.title.string.replace("| Kubernetes", "").strip()
-            markdown_content = self.convert_to_markdown(title, main_content)
 
             save_path = os.path.join(self.save_dir, f"{doc_name}.md")
             with open(save_path, 'w', encoding='utf-8') as f:
