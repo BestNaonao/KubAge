@@ -21,15 +21,18 @@ def chunk_list(lst, chunk_size):
     for i in range(0, len(lst), chunk_size):
         yield lst[i:i + chunk_size]
 
+qwen_path = "../models/Qwen/Qwen3-Embedding-0.6B"
+bge_path = "D:/学习资料/毕业设计/KubAge/models/BAAI/bge-large-zh-v1___5"
+
 # 1. 初始化嵌入模型
 embeddings = HuggingFaceEmbeddings(
-    model_name="../models/Qwen/Qwen3-Embedding-0.6B",
+    model_name=qwen_path,
     model_kwargs={"device": "cuda", "trust_remote_code": True},
     encode_kwargs={"normalize_embeddings": True}
 )
 
 # 2. 初始化 MarkdownTreeParser
-tokenizer = AutoTokenizer.from_pretrained("../models/Qwen/Qwen3-Embedding-0.6B", trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(qwen_path, trust_remote_code=True)
 parser = MarkdownTreeParser(
     embeddings=embeddings,
     tokenizer=tokenizer,
@@ -69,12 +72,10 @@ vector_store = Milvus(
 )
 
 
-max_batch_size = 10  # 建议略低于 5461
+max_batch_size = 1000  # 建议略低于 5461
 for i, batch in enumerate(chunk_list(docs, max_batch_size)):
     # 编码文档以适应Milvus存储
     encoded_batch = [encode_document_for_milvus(doc) for doc in batch]
-    for doc in encoded_batch:
-        print(doc.metadata)
     print(f"[4.{i + 1}] 正在写入批次 {i + 1}，共 {len(batch)} 条...")
     vector_store.add_documents(documents=encoded_batch)
 print("[完成] 文档构建成功！")
