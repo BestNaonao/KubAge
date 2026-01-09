@@ -1,4 +1,6 @@
+import json
 import os
+import traceback
 
 import torch
 from dotenv import find_dotenv, load_dotenv
@@ -16,29 +18,50 @@ MILVUS_PASSWORD = os.getenv('MILVUS_ROOT_PASSWORD')
 
 RAW_DATA_DIR = "../raw_data"
 
-def chunk_list(lst, chunk_size):
-    """将列表按固定大小切分为多个子列表"""
-    for i in range(0, len(lst), chunk_size):
-        yield lst[i:i + chunk_size]
+def chunk_by_token(documents, max_tokens_per_batch=512):  # 例如 512 或 1024
+    batches = []
+    current_batch = []
+    current_tokens = 0
+
+    for doc in documents:
+        tokens = doc.metadata.get("token_count", 0)
+        if tokens > max_tokens_per_batch:   # 单个文档超限
+            print(f"警告：文档 {doc.metadata.get('source')} 超过单批限制 ({tokens} tokens)")
+            # 这里可选择跳过、切分或单独处理
+            batches.append([doc])  # 保守处理：单独成批
+            continue
+
+        if current_tokens + tokens > max_tokens_per_batch:
+            batches.append(current_batch)
+            current_batch = [doc]
+            current_tokens = tokens
+        else:
+            current_batch.append(doc)
+            current_tokens += tokens
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
 
 qwen_path = "../models/Qwen/Qwen3-Embedding-0.6B"
 bge_path = "D:/学习资料/毕业设计/KubAge/models/BAAI/bge-large-zh-v1___5"
 
 # 1. 初始化嵌入模型
 embeddings = HuggingFaceEmbeddings(
-    model_name=bge_path,
+    model_name=qwen_path,
     model_kwargs={"device": "cuda", "trust_remote_code": True},
     encode_kwargs={"normalize_embeddings": True}
 )
 
 # 2. 初始化 MarkdownTreeParser
-tokenizer = AutoTokenizer.from_pretrained(bge_path, trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(qwen_path, trust_remote_code=True)
 parser = MarkdownTreeParser(
     embeddings=embeddings,
     tokenizer=tokenizer,
     min_chunk_size=256,
     core_chunk_size=512,
-    max_chunk_size=1024
+    max_chunk_size=2048,
 )
 
 # 3. 解析所有 Markdown 文件
@@ -72,11 +95,23 @@ vector_store = Milvus(
 )
 
 
-max_batch_size = 10  # 建议略低于 5461
-for i, batch in enumerate(chunk_list(docs, max_batch_size)):
+max_token = 0
+for i, batch in enumerate(chunk_by_token(docs, 2048)):
     # 编码文档以适应Milvus存储
     encoded_batch = [encode_document_for_milvus(doc) for doc in batch]
-    print(f"[4.{i + 1}] 正在写入批次 {i + 1}，共 {len(batch)} 条...")
-    vector_store.add_documents(documents=encoded_batch)
-    torch.cuda.empty_cache()
+    titles = [doc.metadata.get('title', '') for doc in encoded_batch]
+    sources = [doc.metadata.get('source', '') for doc in encoded_batch]
+    token_counts = [doc.metadata.get('token_count', 0) for doc in encoded_batch]
+    max_token = max(max_token, max(token_counts))
+
+    print(f"\r[4.{i + 1}] 正在写入批次 {i + 1}，共 {len(batch)} 条... 最大token数: {max_token}, ", end="", flush=True)
+    try:
+        vector_store.add_documents(documents=encoded_batch)
+    except Exception as e:
+        traceback.print_exc()
+        print(f"tokens: {json.dumps(token_counts, ensure_ascii=False)}, "
+          f"文档: {json.dumps(titles, ensure_ascii=False)[-30:]}, "
+          f"来自: {json.dumps(sources, ensure_ascii=False)[-30:]}")
+        raise e
+
 print("[完成] 文档构建成功！")
