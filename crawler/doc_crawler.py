@@ -7,7 +7,6 @@ from queue import Queue, Empty
 from typing import List, Dict
 from urllib.parse import urljoin
 
-import html2text
 import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
@@ -29,20 +28,6 @@ REMOVE_TEXT: str = "此页是否对你有帮助"
 
 
 class DocCrawler(object):
-    visited: Queue[str]
-    to_visit: Queue[str]
-    errored: Queue[str]
-    session: requests.Session
-    lock: threading.Lock
-    visited_set: set
-    to_visit_set: set
-    filename_counter: Dict[str, int]
-    active_threads: int
-    num_threads: int
-    logger: logging.Logger
-    save_dir: str
-    html2text_processor: html2text.HTML2Text
-
     def __init__(self, num_threads, save_dir):
         self.visited = Queue()
         self.to_visit = Queue()
@@ -64,12 +49,6 @@ class DocCrawler(object):
         self.save_dir = save_dir
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
-        self.html2text_processor = html2text.HTML2Text()
-        self.html2text_processor.body_width = 0
-        self.html2text_processor.ignore_links = True
-        self.html2text_processor.ignore_images = False
-        self.html2text_processor.ignore_emphasis = False
-        self.html2text_processor.mark_code = True
 
     @staticmethod
     def _create_session():

@@ -1,113 +1,37 @@
 import asyncio
-import logging
-import os
 import traceback
-from typing import List, Dict, Set
-from urllib.parse import urljoin
+from typing import override
 
 import aiohttp
-from bs4 import BeautifulSoup
-from utils.html2md_utils import convert_to_markdown, get_span_path
+
+from crawler.K8sCrawler import K8sCrawler
 
 
-HEADERS: Dict[str, str] = {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
-    "Connection": "keep-alive"
-}
-NO_REF_URL: str = "https://kubernetes.io"
-BASE_URL: str = "https://kubernetes.io/zh-cn/docs/"
-START_URL: str = BASE_URL + "home/"
-ELEMENT_NAME_LIST: List[str] = ['p', 'h1', 'h2', 'h3', 'h4', 'li', 'code']
-EXCLUDE_HREF_PREFIXES = ["/contribute", "/blog", "/training", "/careers", "/partners", "/community", "/test"]
-REMOVE_TEXT: str = "此页是否对你有帮助"
-
-
-class AsyncDocCrawler:
+class AsyncDocCrawler(K8sCrawler):
     def __init__(self, num_workers: int, save_dir: str):
-        self.num_workers = num_workers
-        self.save_dir = save_dir
-        self.visit_lock = asyncio.Lock()
-        self.found: Set[str] = set()
+        super().__init__(num_workers, save_dir)
+        self.lock = asyncio.Lock()
         self.to_visit = asyncio.Queue()
-        self.errored: List[str] = []  # 只追加
-
-        # 日志配置
-        self.logger = logging.getLogger(type(self).__name__)
-        self.logger.setLevel(logging.DEBUG)
-        handler = logging.FileHandler("crawler_async.log", encoding='utf-8')
-        handler.setLevel(logging.DEBUG)
-        handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-        self.logger.addHandler(handler)
-
-        # 创建保存目录
-        os.makedirs(save_dir, exist_ok=True)
-
-    # ========== 以下业务方法完全保留原逻辑 ==========
-    @staticmethod
-    def extract_new_urls(soup, url) -> List[str]:
-        """提取页面中的新URL并返回列表"""
-        new_urls = []
-        parent_elements = soup.select("ul.ul-1")
-        for parent_element in parent_elements:
-            for link in parent_element.find_all('a', href=True):
-                href = link.get('href')
-                full_url = urljoin(BASE_URL, link['href'])
-                if any(prefix in href for prefix in EXCLUDE_HREF_PREFIXES) or not full_url.startswith(BASE_URL):
-                    continue
-                if '#' in full_url or full_url == url:
-                    continue
-                new_urls.append(full_url)
-        return new_urls
-
-    def get_unique_filename(self, base_name: str) -> str:
-        """生成唯一的文件名，避免冲突"""
-        counter = 1
-        candidate = base_name
-        while os.path.exists(os.path.join(self.save_dir, f"{candidate}.md")):
-            candidate = f"{base_name}_{counter}"
-            counter += 1
-        return candidate
-
-    async def extract_content(self, session: aiohttp.ClientSession, url: str):
-        """提取网页中的内容，包括标题和正文，最后保存"""
-        try:
-            self.logger.info(f"开始爬取: {url}")
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                resp.raise_for_status()
-                html = await resp.text()
-
-            soup = BeautifulSoup(html, 'lxml')
-
-            # 提取新链接
-            new_urls = self.extract_new_urls(soup, url)
-            async with self.visit_lock:
-                for u in new_urls:
-                    if u not in self.found:
-                        self.found.add(u)
-                        await self.to_visit.put(u)
-
-            doc_name = self.get_unique_filename(get_span_path(soup, url, NO_REF_URL))
-            markdown_content = convert_to_markdown(soup)
-
-            if not markdown_content:
-                self.logger.warning(f"⚠️ 未找到正文内容: {url}")
-                return
-
-            save_path = os.path.join(self.save_dir, f"{doc_name}.md")
-            with open(save_path, 'w', encoding='utf-8') as f:
-                f.write(markdown_content)
-            self.logger.info(f"已保存: {save_path} (字符数: {len(markdown_content)})")
-
-        except Exception as e:
-            self.errored.append(url)
-            self.logger.error(f"❌ 处理失败 {url}: {e}\n{traceback.format_exc()}")
-            await asyncio.sleep(1)
 
     async def worker(self, session: aiohttp.ClientSession):
+        url = ""
         while True:
             try:
                 url = await asyncio.wait_for(self.to_visit.get(), timeout=10.0)
-                await self.extract_content(session, url)
+                self.logger.info(f"开始爬取: {url}")
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    resp.raise_for_status()
+                    html = await resp.text()
+
+                new_urls, span_name, markdown_content = self.parse_html(html, url)
+
+                async with self.lock:
+                    for u in new_urls:
+                        if u not in self.found:
+                            self.found.add(u)
+                            await self.to_visit.put(u)
+                    file_name = self.get_unique_filename(span_name)
+                self.save(markdown_content, url, file_name)
                 self.to_visit.task_done()
             except asyncio.TimeoutError:
                 self.logger.info("Worker 超时退出，队列可能已空")
@@ -116,19 +40,20 @@ class AsyncDocCrawler:
                 self.logger.info("Worker 被取消")
                 break
             except Exception as e:
-                self.logger.error(f"Worker 异常: {e}")
+                if url:
+                    self.errored.append(url)
+                self.logger.error(f"❌ 处理失败 {url}: {str(e)}, traceback: {traceback.format_exc()}")
+                await asyncio.sleep(1)
 
     async def start(self):
-        self.found.clear()
-        self.errored.clear()
-        self.found.add(START_URL)
-        await self.to_visit.put(START_URL)
+        self.initialize()
+        await self.to_visit.put(self.start_url)
 
         # 创建带重试的 aiohttp session
         timeout = aiohttp.ClientTimeout(total=30)
         connector = aiohttp.TCPConnector(limit=50, limit_per_host=10)
         async with aiohttp.ClientSession(
-            headers=HEADERS,
+            headers=self.headers,
             timeout=timeout,
             connector=connector
         ) as session:
@@ -147,13 +72,8 @@ class AsyncDocCrawler:
                         self.logger.info("所有任务完成，没有活跃的worker")
                         break
 
-                    if total > 0:
-                        progress = (total - to_do) / total * 100
-                        print(
-                            f"\r📊 进度: {total - to_do}/{total} ({progress:.1f}%) | "
-                            f"队列: {to_do} | 活跃Worker: {active_count} | 错误: {len(self.errored)}",
-                            end='', flush=True
-                        )
+                    self.show_progress(total - to_do, total, active_count)
+
                     await asyncio.sleep(0.5)
             except KeyboardInterrupt:
                 self.logger.info("用户中断，正在取消任务...")
@@ -161,15 +81,13 @@ class AsyncDocCrawler:
                     w.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
 
-        print("\n" + "=" * 50)
-        self.logger.info(f"爬取完成! 总共访问: {len(self.found)} 页面, 错误: {len(self.errored)}")
+        self.quit_print()
 
-        if self.errored:
-            self.logger.info("----- 以下URL获取失败:")
-            for url in self.errored:
-                self.logger.info(f"--- {url}")
+    @override
+    def run(self):
+        asyncio.run(self.start())
 
 
 if __name__ == "__main__":
     crawler = AsyncDocCrawler(num_workers=10, save_dir="../raw_data")
-    asyncio.run(crawler.start())
+    crawler.run()
