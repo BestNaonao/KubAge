@@ -86,6 +86,9 @@ def convert_to_markdown(soup: BeautifulSoup) -> str:
     for element in main_content.select('.toolbar, .edit-page-link, .feedback--title, .pagehead'):
         element.decompose()
 
+    # 修复错误嵌套的alert div（在移除其他元素后立即处理）
+    fix_misnested_alerts(main_content)
+
     # 提取并处理面包屑导航
     breadcrumb_nav = main_content.find('nav')
     breadcrumb_str = ""
@@ -139,6 +142,29 @@ def convert_to_markdown(soup: BeautifulSoup) -> str:
     markdown_content = markdown_content.split("## 反馈")[0]
 
     return markdown_content
+
+def fix_misnested_alerts(main_content: BeautifulSoup):
+    """
+    修复错误嵌套的alert div：将alert内部的第一个h2及其后续内容移出到alert之后
+    """
+    # 查找所有可能错误嵌套的alert div
+    for alert_div in main_content.find_all('div', class_=lambda x: x and 'alert' in x.split()):
+        # 查找alert内部的第一个h2（或h1/h3等标题，根据需要扩展）
+        header_tag = alert_div.find(['h1', 'h2', 'h3'])
+
+        # 如果没有找到标题，或者标题是第一个子元素（正常情况），则跳过
+        if not header_tag or header_tag == alert_div.contents[0]:
+            continue
+
+        # 获取需要移出的内容：从标题开始到alert结束的所有兄弟元素
+        elements_to_move = [header_tag] + header_tag.find_next_siblings()
+
+        # 将这些元素从alert中移除，然后按原始顺序将元素插入到alert之后
+        for elem in elements_to_move:
+            elem.extract()
+
+        for elem in elements_to_move:
+            alert_div.insert_after(elem)
 
 def get_span_path(soup, url: str, no_ref_url) -> str:
     # 尝试找到当前页面的导航路径
