@@ -391,7 +391,6 @@ class MarkdownTreeParser:
         current_group = []
         for child in children:
             if (child.metadata["node_type"] != NodeType.LEAF or
-                child.metadata.get("from_split", False) or
                 child.metadata["token_count"] >= merge_target_size):
                 # 结束当前组并开始新组
                 if current_group:
