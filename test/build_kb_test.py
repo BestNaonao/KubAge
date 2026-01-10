@@ -72,6 +72,7 @@ for file in os.listdir(RAW_DATA_DIR):
         file_path = os.path.join(RAW_DATA_DIR, file)
         docs.extend(parser.parse_markdown_to_tree(file_path))
         torch.cuda.empty_cache()
+total = len(docs)
 
 # 4. 存入 Milvus
 vector_store = Milvus(
@@ -96,6 +97,7 @@ vector_store = Milvus(
 
 
 max_token = 0
+doc_count = 0
 for i, batch in enumerate(chunk_by_token(docs, 2048)):
     # 编码文档以适应Milvus存储
     encoded_batch = [encode_document_for_milvus(doc) for doc in batch]
@@ -104,14 +106,16 @@ for i, batch in enumerate(chunk_by_token(docs, 2048)):
     token_counts = [doc.metadata.get('token_count', 0) for doc in encoded_batch]
     max_token = max(max_token, max(token_counts))
 
-    print(f"\r[4.{i + 1}] 正在写入批次 {i + 1}，共 {len(batch)} 条... 最大token数: {max_token}, ", end="", flush=True)
+    print(f"\r[4.{i + 1}] 正在写入批次 {i + 1}，共 {len(batch)} 条... 已处理: {doc_count} / {total} 条,"
+          f"最大token数: {max_token}, tokens: {json.dumps(token_counts, ensure_ascii=False)}, ", end="", flush=True)
     try:
         vector_store.add_documents(documents=encoded_batch)
     except Exception as e:
         traceback.print_exc()
-        print(f"tokens: {json.dumps(token_counts, ensure_ascii=False)}, "
-          f"文档: {json.dumps(titles, ensure_ascii=False)[-30:]}, "
+        print(f"文档: {json.dumps(titles, ensure_ascii=False)[-30:]}, "
           f"来自: {json.dumps(sources, ensure_ascii=False)[-30:]}")
         raise e
+    doc_count += len(batch)
+    torch.cuda.empty_cache()
 
-print("[完成] 文档构建成功！")
+print("\n[完成] 文档构建成功！")
