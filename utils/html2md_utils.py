@@ -1,8 +1,10 @@
 import re
 
 import html2text
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
+
+SPECIAL_HEADER_REG = ["概要", "摘要", "清理", "我何时该使用", "另请参见"]
 
 def _normalize_tables(soup):
     """
@@ -83,11 +85,13 @@ def convert_to_markdown(soup: BeautifulSoup) -> str:
 
     # 预处理HTML内容
     # 移除不需要的元素
-    for element in main_content.select('.toolbar, .edit-page-link, .feedback--title, .pagehead'):
+    for element in main_content.select('.toolbar, .edit-page-link, .feedback--title, .pagehead, #third-party-content-disclaimer'):
         element.decompose()
 
     # 修复错误嵌套的alert div（在移除其他元素后立即处理）
     fix_misnested_alerts(main_content)
+    # 修复标题层级问题
+    fix_header_hierarchy(main_content, soup)
 
     # 提取并处理面包屑导航
     breadcrumb_nav = main_content.find('nav')
@@ -165,6 +169,71 @@ def fix_misnested_alerts(main_content: BeautifulSoup):
 
         for elem in elements_to_move:
             alert_div.insert_after(elem)
+
+def fix_header_hierarchy(main_content: Tag, soup: BeautifulSoup):
+    """
+    修复标题跨级问题：
+    - 从第一个<h1>开始处理所有后续标题
+    - 基于文档结构关系（而非数值）确定标题层级
+    - 正确处理多个h1的情况（后续h1视为新章节起点）
+    """
+    first_h1 = main_content.find('h1')
+    if not first_h1 or first_h1 is None:
+        return
+
+    headers: list[Tag] = [first_h1] + first_h1.find_next_siblings(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+
+    if len(headers) < 2:
+        return
+
+    # 步骤1: 构建父级索引数组
+    # parents[i] = headers[i] 的父级标题在headers中的索引，-1表示父级是第一个h1
+    n = len(headers)
+    parents = [-1] * n
+
+    # 使用栈跟踪可能的父级，栈中存储 (index, original_level) 元组，按层级从小到大排列
+    stack: list[tuple[int, int]] = []
+
+    for i, header in enumerate(headers):
+        current_level = int(header.name[1])  # 从标签名提取层级数字
+
+        # 弹出栈中所有层级大于等于当前标题的元素
+        while stack and stack[-1][1] >= current_level:
+            stack.pop()
+
+        # 确定父级
+        if stack:
+            parents[i] = stack[-1][0]   # 栈顶元素是最近的、层级小于当前标题的父级
+        else:
+            parents[i] = -1 # 没有合适的父级，使用 h1 作为父级
+
+        # 将当前标题压入栈
+        stack.append((i, current_level))
+
+    # 第二步：根据父级关系计算正确的层级
+    # 父级下标为 -1 的标题层级为 1 (h1), 其他标题层级 = 父级层级 + 1
+    corrected_levels = [0] * n
+
+    for i in range(n):
+        if parents[i] == -1:
+            # 父级是 h1，层级为 2
+            corrected_levels[i] = 1
+        else:
+            # 父级是 headers_after_h1 中的某个标题
+            corrected_levels[i] = corrected_levels[parents[i]] + 1
+
+    # 应用修正后的层级
+    for i in range(n):
+        header = headers[i]
+        header_text = header.get_text(strip=True)
+        new_tag_name = f'h{corrected_levels[i]}'
+        if header.name != new_tag_name:
+            if any(phrase in header for phrase in SPECIAL_HEADER_REG):
+                strong_tag = soup.new_tag('strong')
+                strong_tag.string = header_text
+                header.replace_with(strong_tag)
+            else:
+                header.name = new_tag_name
 
 def get_span_path(soup, url: str, no_ref_url) -> str:
     # 尝试找到当前页面的导航路径
