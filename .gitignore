@@ -2,3 +2,4 @@
 /models
 /raw_data
 /.idea
+/crawler/*.log
