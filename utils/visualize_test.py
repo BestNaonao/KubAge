@@ -33,12 +33,12 @@ parser = MarkdownTreeParser(
     tokenizer=tokenizer,
     min_chunk_size=256,
     core_chunk_size=512,
-    max_chunk_size=1024
+    max_chunk_size=2048
 )
 
 # 3. 解析所有 Markdown 文件
 docs = []
-for file in ["../raw_data/文档_任务_管理集群_IP Masquerade Agent 用户指南.md"]:
+for file in ["../raw_data/文档_参考_安装工具_Kubeadm_kubeadm init.md"]:
     print(f"正在处理：{file}, 已完成：{len(docs)}")
     if file.endswith(".md"):
         file_path = os.path.join(RAW_DATA_DIR, file)
