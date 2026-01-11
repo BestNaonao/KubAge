@@ -156,3 +156,41 @@ class K8sCrawler(ABC):
             print(f"处理文件时发生错误: {e}")
             return False
 
+    def replace_content_by_regex(self, file_name: str, regex_pattern: str, substitute: str):
+        """
+        在文件中替换符合正则表达式的内容
+
+        参数:
+        file_name (str): 文件名（不含路径）
+        regex_pattern (str): 用于匹配内容的正则表达式
+        substitute (str): 替换后的字符串内容
+        """
+        try:
+            # 构建完整文件路径
+            file_path = os.path.join(self.save_dir, file_name)
+
+            # 读取文件内容
+            with open(file_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+
+            # 检查是否有匹配内容
+            if not re.search(regex_pattern, content, re.MULTILINE):
+                print(f"未找到匹配内容: {regex_pattern}")
+                return False
+
+            # 执行替换（替换所有匹配项）
+            new_content, count = re.subn(regex_pattern, substitute, content, flags=re.MULTILINE)
+
+            # 写回文件
+            with open(file_path, 'w', encoding='utf-8') as file:
+                file.write(new_content)
+
+            print(f"成功替换 {count} 处内容, 原始模式: {regex_pattern}, 替换为: {substitute}")
+            return True
+
+        except FileNotFoundError:
+            print(f"文件不存在: {file_name}")
+            return False
+        except Exception as e:
+            print(f"处理文件时发生错误: {e}")
+            return False

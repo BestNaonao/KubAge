@@ -92,7 +92,12 @@ if __name__ == "__main__":
     crawler = AsyncDocCrawler(num_workers=10, save_dir="../raw_data")
     crawler.run()
     crawler.insert_title_at_regex_position(
-        "文档_参考_API 访问控制_用户认证.md",
-        "\n###### CEL 表达式规则",
-        r'\n\s*\* 申领验证规则表达式'
+        file_name="文档_参考_API 访问控制_用户认证.md",
+        title="\n###### CEL 表达式规则",
+        regex_pattern=r'\n\s*\* 申领验证规则表达式'
+    )
+    crawler.replace_content_by_regex(
+        file_name="文档_概念_工作负载_工作负载管理_Job.md",
+        regex_pattern=r"3\.1415926535[\s\S]*?```",
+        substitute="3.1415926535...\n```"
     )
