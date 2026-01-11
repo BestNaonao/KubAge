@@ -109,7 +109,7 @@ for i, batch in enumerate(chunk_by_token(docs, 2048)):
     print(f"\r[4.{i + 1}] 正在写入批次 {i + 1}，共 {len(batch)} 条... 已处理: {doc_count} / {total} 条,"
           f"最大token数: {max_token}, tokens: {json.dumps(token_counts, ensure_ascii=False)}, ", end="", flush=True)
     try:
-        vector_store.add_documents(documents=encoded_batch)
+        vector_store.add_documents(documents=encoded_batch, ids=[doc.id for doc in encoded_batch])
     except Exception as e:
         traceback.print_exc()
         print(f"文档: {json.dumps(titles, ensure_ascii=False)[-30:]}, "
