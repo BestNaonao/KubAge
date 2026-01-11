@@ -166,7 +166,7 @@ def fix_misnested_alerts(main_content: BeautifulSoup):
         # 将这些元素从alert中移除，然后按原始顺序将元素插入到alert之后
         for elem in elements_to_move:
             elem.extract()
-
+        elements_to_move.reverse()
         for elem in elements_to_move:
             alert_div.insert_after(elem)
 
