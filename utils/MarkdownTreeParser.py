@@ -84,11 +84,14 @@ class MarkdownTreeParser:
             level=0,
             title=file_name,
             token_count=0,
-            node_type=NodeType.ROOT
+            node_type=NodeType.ROOT,
+            nav_next_step='',
+            nav_see_also=''
         )
         # 构建文档树
         id_map = {root_doc.id: root_doc}
         self._build_subtree(root_doc.id, id_map, extracted_blocks)
+        self._extract_navigation_sections(id_map)  # 提取"接下来"和"另请参见"章节内容到根节点
         self._optimize_tree_structure(id_map)   # 优化树结构（合并小节点）
         self._set_sibling_relations(id_map)  # 统一设置兄弟关系
 
@@ -118,7 +121,9 @@ class MarkdownTreeParser:
             left_sibling: str = '',
             right_sibling: str = '',
             from_split: bool = False,
-            merged: bool = False
+            merged: bool = False,
+            nav_next_step: str = '',
+            nav_see_also: str = ''
     ) -> Document:
         """创建文档节点
 
@@ -135,6 +140,8 @@ class MarkdownTreeParser:
             right_sibling: 右兄弟节点ID（默认None）
             from_split: 是否来自切分（默认False）
             merged: 是否合并节点（默认False）
+            nav_next_step: "接下来"章节内容（默认空字符串）
+            nav_see_also: "另请参见"章节内容（默认空字符串）
         """
         metadata = {
             "source": source,
@@ -147,7 +154,9 @@ class MarkdownTreeParser:
             "left_sibling": left_sibling,
             "right_sibling": right_sibling,
             "from_split": from_split,
-            "merged": merged
+            "merged": merged,
+            "nav_next_step": nav_next_step,
+            "nav_see_also": nav_see_also
         }
 
         doc = Document(page_content=content, metadata=metadata)
@@ -202,7 +211,9 @@ class MarkdownTreeParser:
                     parent_id=parent_id,
                     level=parent_level + 1,
                     title=full_title,
-                    token_count=0
+                    token_count=0,
+                    nav_next_step='',
+                    nav_see_also=''
                 )
                 node_id = child_doc.id
 
@@ -348,7 +359,9 @@ class MarkdownTreeParser:
                 title=child_title,
                 token_count=chunk['tokens'],
                 node_type=NodeType.LEAF,
-                from_split=True
+                from_split=True,
+                nav_next_step='',
+                nav_see_also=''
             )
             id_map[child_doc.id] = child_doc
             doc.metadata["child_ids"].append(child_doc.id)
@@ -456,7 +469,9 @@ class MarkdownTreeParser:
             level=nodes[0].metadata["level"],
             title=merged_title,
             token_count=sum(leaf.metadata["token_count"] for leaf in nodes),
-            merged=True
+            merged=True,
+            nav_next_step='',
+            nav_see_also=''
         )
 
     def _merge_sibling_group(self, group: List[Document], target_size: int) -> List[Document]:
@@ -524,3 +539,61 @@ class MarkdownTreeParser:
                     child = id_map[child_id]
                     child.metadata["left_sibling"] = child_ids[i - 1] if i > 0 else ''
                     child.metadata["right_sibling"] = child_ids[i + 1] if i < len(child_ids) - 1 else ''
+
+    def _extract_navigation_sections(self, id_map: Dict[str, Document]):
+        """
+        提取"接下来"和"另请参见"章节内容到根节点，然后从文档树中移除这些节点
+        
+        参数:
+            id_map: 节点ID到文档节点的映射
+        """
+        # 找到根节点
+        root_doc = None
+        for doc in id_map.values():
+            if doc.metadata["node_type"] == NodeType.ROOT:
+                root_doc = doc
+                break
+        
+        if not root_doc:
+            return  # 没有找到根节点，直接返回
+        
+        # 定义正则表达式模式
+        next_step_pattern = re.compile(r'^#{1,}\s+接下来', re.MULTILINE)
+        see_also_pattern = re.compile(r'^#{1,}\s+另请参见', re.MULTILINE)
+        
+        # 遍历所有节点查找导航章节
+        nodes_to_prune = []
+        for node_id, node in id_map.items():
+            if node.metadata["node_type"] == NodeType.LEAF:
+                content = node.page_content
+                
+                # 检查是否是"接下来"章节
+                if next_step_pattern.search(content):
+                    # 提取内容（去掉标题行）
+                    lines = content.split('\n')
+                    content_without_title = '\n'.join(line for line in lines if not next_step_pattern.match(line))
+                    root_doc.metadata["nav_next_step"] = content_without_title.strip()
+                    nodes_to_prune.append(node_id)
+                
+                # 检查是否是"另请参见"章节
+                elif see_also_pattern.search(content):
+                    # 提取内容（去掉标题行）
+                    lines = content.split('\n')
+                    content_without_title = '\n'.join(line for line in lines if not see_also_pattern.match(line))
+                    root_doc.metadata["nav_see_also"] = content_without_title.strip()
+                    nodes_to_prune.append(node_id)
+        
+        # 剪枝操作：从树中移除导航章节节点
+        for node_id in nodes_to_prune:
+            if node_id in id_map:
+                node_to_remove = id_map[node_id]
+                parent_id = node_to_remove.metadata["parent_id"]
+                
+                # 从父节点的child_ids中移除该节点
+                if parent_id and parent_id in id_map:
+                    parent_node = id_map[parent_id]
+                    if node_id in parent_node.metadata["child_ids"]:
+                        parent_node.metadata["child_ids"].remove(node_id)
+                
+                # 从id_map中移除该节点
+                del id_map[node_id]
