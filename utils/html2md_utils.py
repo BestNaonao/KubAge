@@ -4,7 +4,7 @@ import html2text
 from bs4 import BeautifulSoup, Tag
 
 
-SPECIAL_HEADER_REG = ["概要", "摘要", "清理", "我何时该使用", "另请参见"]
+SPECIAL_HEADER_REG = ["概要", "摘要", "清理", "我何时该使用"]
 
 def _normalize_tables(soup):
     """
