@@ -67,7 +67,7 @@ parser = MarkdownTreeParser(
 # 3. 解析所有 Markdown 文件
 docs = []
 for file in os.listdir(RAW_DATA_DIR):
-    print(f"正在处理：{file}, 已完成：{len(docs)}")
+    print(f"\r正在处理：{file}, 已完成：{len(docs)}", end="", flush=True)
     if file.endswith(".md"):
         file_path = os.path.join(RAW_DATA_DIR, file)
         docs.extend(parser.parse_markdown_to_tree(file_path))
