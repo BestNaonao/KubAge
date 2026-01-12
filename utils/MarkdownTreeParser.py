@@ -51,9 +51,16 @@ class MarkdownTreeParser:
             sentence_split_regex = r"(?<=[.?!。？！])\s+",
         )
 
+        # 节点ID到文档节点的映射
+        self.id_map = {}
+
         # 用于定位导航章节的正则表达式
-        self.next_step_pattern = re.compile(r'^#+\s+接下来', re.MULTILINE)
-        self.see_also_pattern = re.compile(r'^#+\s+另请参见', re.MULTILINE)
+        self.next_step_pattern = re.compile(r'\s*#+\s+接下来', re.MULTILINE)
+        self.see_also_pattern = re.compile(r'\s*#+\s+另请参见', re.MULTILINE)
+
+    @property
+    def documents(self) -> List[Document]:
+        return list(self.id_map.values())
 
     def count_tokens(self, content: str) -> int:
         """计算文本的token数量"""
@@ -91,18 +98,17 @@ class MarkdownTreeParser:
             node_type=NodeType.ROOT
         )
         # 构建文档树
-        id_map = {root_doc.id: root_doc}
-        self._build_subtree(root_doc.id, id_map, extracted_blocks)
-        self._extract_navigation_sections(id_map, root_doc)  # 提取"接下来"和"另请参见"章节内容到根节点
-        self._optimize_tree_structure(id_map)   # 优化树结构（合并小节点）
-        self._set_sibling_relations(id_map)  # 统一设置兄弟关系
+        self.id_map = {root_doc.id: root_doc}
+        self._build_subtree(root_doc.id, root_doc, extracted_blocks)
+        self._optimize_tree_structure()     # 优化树结构（合并小节点）
+        self._set_sibling_relations()       # 统一设置兄弟关系
 
         # 添加回文件头部
         if header_content:
             root_doc.page_content = header_content + root_doc.page_content
             root_doc.metadata["token_count"] = self.count_tokens(root_doc.page_content)
 
-        return list(id_map.values())
+        return self.documents
 
     @staticmethod
     def _generate_node_id(title: str) -> str:
@@ -165,16 +171,16 @@ class MarkdownTreeParser:
         setattr(doc, 'id', MarkdownTreeParser._generate_node_id(title))
         return doc
 
-    def _build_subtree(self, parent_id: str, id_map: Dict[str, Document], extracted_blocks: List[Any]) -> None:
+    def _build_subtree(self, parent_id: str, root_doc: Document, extracted_blocks: List[Any]) -> None:
         """
         递归构建文档子树
 
         参数:
             parent_id: 父节点ID
-            id_map: 节点ID到文档节点的映射
+            root_doc: 当前文档树的根节点文档
             extracted_blocks: 提取的块内容（代码块、提醒框等）
         """
-        parent_doc = id_map[parent_id]
+        parent_doc = self.id_map[parent_id]
         parent_level = parent_doc.metadata["level"]
         parent_title = parent_doc.metadata["title"]
         parent_content = parent_doc.page_content
@@ -206,6 +212,17 @@ class MarkdownTreeParser:
                 unique_title = f"{section_title}_{count}" if count > 1 else section_title
                 full_title = f"{parent_title}_{unique_title}"
 
+                # 提取"接下来"和"另请参见"章节内容到根节点
+                is_next_step = self.next_step_pattern.match(section_content)
+                is_see_also = self.see_also_pattern.match(section_content)
+                # 检查是否是"接下来"章节或"另请参见"章节
+                if is_next_step or is_see_also:
+                    # 提取内容（去掉标题行）
+                    content_lines = section_content.strip().split('\n')
+                    content_without_title = '\n'.join(content_lines[1:]).strip()
+                    root_doc.metadata["nav_next_step" if is_next_step else "nav_see_also"] = content_without_title
+                    continue
+
                 # 创建子节点
                 child_doc = MarkdownTreeParser._create_document_node(
                     content=section_content,
@@ -218,11 +235,11 @@ class MarkdownTreeParser:
                 node_id = child_doc.id
 
                 # 更新节点映射和父节点关系
-                id_map[node_id] = child_doc
+                self.id_map[node_id] = child_doc
                 parent_doc.metadata["child_ids"].append(node_id)
 
                 # 递归构建子树
-                self._build_subtree(node_id, id_map, extracted_blocks)
+                self._build_subtree(node_id, root_doc, extracted_blocks)
 
         # 回溯阶段：统一恢复内容并计算token数量
         # 1. 恢复块内容
@@ -232,7 +249,7 @@ class MarkdownTreeParser:
         # 3. 如果是叶子节点且超过限制，则切分
         if parent_doc.metadata["node_type"] == NodeType.LEAF and token_count > self.max_chunk_size:
             # 使用原始占位符内容进行切分（避免重复提取块内容）
-            self._split_large_leaf_node(parent_doc, id_map, extracted_blocks)
+            self._split_large_leaf_node(parent_doc, extracted_blocks)
         else:
             parent_doc.page_content = restored_content
             parent_doc.metadata["token_count"] = token_count
@@ -306,7 +323,7 @@ class MarkdownTreeParser:
 
         return final_chunks
 
-    def _split_large_leaf_node(self, doc: Document, id_map: Dict[str, Document], extracted_blocks: List[Any]) -> None:
+    def _split_large_leaf_node(self, doc: Document, extracted_blocks: List[Any]) -> None:
         """
         将大叶子节点转换为 CONTAINER 节点，并将其切分块作为子节点。
         """
@@ -361,60 +378,14 @@ class MarkdownTreeParser:
                 node_type=NodeType.LEAF,
                 from_split=True
             )
-            id_map[child_doc.id] = child_doc
+            self.id_map[child_doc.id] = child_doc
             doc.metadata["child_ids"].append(child_doc.id)
 
-    def _extract_navigation_sections(self, id_map: Dict[str, Document], root_doc: Document):
-        """
-        提取"接下来"和"另请参见"章节内容到根节点，然后从文档树中移除这些节点
-
-        参数:
-            id_map: 节点ID到文档节点的映射
-        """
-        if root_doc.metadata["node_type"] != NodeType.ROOT:
-            return
-
-        # 遍历所有节点查找导航章节
-        nodes_to_prune = []
-        for node_id, node in id_map.items():
-            if node.metadata["node_type"] == NodeType.LEAF:
-                content = node.page_content
-
-                is_next_step = self.next_step_pattern.search(content)
-                is_see_also = self.see_also_pattern.search(content)
-                # 检查是否是"接下来"章节或"另请参见"章节
-                if is_next_step or is_see_also:
-                    # 提取内容（去掉标题行）
-                    content_lines = node.page_content.strip().split('\n')
-                    content_without_title = '\n'.join(content_lines[1:]).strip()
-                    root_doc.metadata["nav_next_step" if is_next_step else "nav_see_also"] = content_without_title
-                    nodes_to_prune.append(node_id)
-
-        # 剪枝操作：从树中移除导航章节节点
-        for node_id in nodes_to_prune:
-            if node_id in id_map:
-                node_to_remove = id_map[node_id]
-                parent_id = node_to_remove.metadata["parent_id"]
-
-                # 从父节点的child_ids中移除该节点
-                if parent_id and parent_id in id_map:
-                    parent_node = id_map[parent_id]
-                    if node_id in parent_node.metadata["child_ids"]:
-                        parent_node.metadata["child_ids"].remove(node_id)
-
-                        # 如果父节点因为移除子节点而变为叶子节点，则更新其类型
-                        if len(parent_node.metadata["child_ids"]) == 0 and parent_node.metadata[
-                            "node_type"] != NodeType.ROOT:
-                            parent_node.metadata["node_type"] = NodeType.LEAF
-
-                # 从id_map中移除该节点
-                del id_map[node_id]
-
-    def _optimize_tree_structure(self, id_map: Dict[str, Document]):
+    def _optimize_tree_structure(self):
         """优化树结构：合并兄弟节点，跳过切分节点"""
         # 创建按层级降序的优先队列
         priority_queue = PriorityQueue()
-        for doc in id_map.values():
+        for doc in self.documents:
             # 仅非叶子节点入队（跳过所有叶子节点）
             if doc.metadata["node_type"] != NodeType.LEAF:
                 priority_queue.put((-doc.metadata["level"], doc.id, doc))
@@ -426,19 +397,19 @@ class MarkdownTreeParser:
             # 跳过已删除的节点，处理非叶子节点的子节点合并
             if doc.id in nodes_to_remove:
                 continue
-            self._handle_parent_node(doc, id_map, nodes_to_remove)
+            self._handle_parent_node(doc, nodes_to_remove)
 
         # 移除标记的节点
         for node_id in nodes_to_remove:
-            if node_id in id_map:
-                del id_map[node_id]
+            if node_id in self.id_map:
+                del self.id_map[node_id]
 
-    def _handle_parent_node(self, doc: Document, id_map: Dict[str, Document], nodes_to_remove: set):
+    def _handle_parent_node(self, doc: Document, nodes_to_remove: set):
         """处理非叶子节点的子节点合并"""
         child_ids = doc.metadata["child_ids"]
         if not child_ids:
             return
-        children = [id_map[cid] for cid in child_ids]
+        children = [self.id_map[cid] for cid in child_ids]
 
         # 判断父节点类型以决定合并上限
         merge_target_size = self.max_chunk_size if doc.metadata["node_type"] == NodeType.CONTAINER else self.core_chunk_size
@@ -476,7 +447,7 @@ class MarkdownTreeParser:
             new_child_ids = [child.id for child in merged_children]
             doc.metadata["child_ids"] = new_child_ids
             for child in merged_children:
-                id_map[child.id] = child
+                self.id_map[child.id] = child
 
             # 标记被合并的节点待删除
             original_ids = set(child.id for child in children)
@@ -492,7 +463,8 @@ class MarkdownTreeParser:
             doc.page_content += "\n" + merged_children[0].page_content
             doc.metadata["token_count"] += merged_children[0].metadata["token_count"]
             doc.metadata["child_ids"] = []
-            doc.metadata["node_type"] = NodeType.LEAF
+            if doc.metadata["node_type"] != NodeType.ROOT:
+                doc.metadata["node_type"] = NodeType.LEAF
 
             # 标记子节点待删除
             nodes_to_remove.add(merged_children[0].id)
@@ -571,13 +543,12 @@ class MarkdownTreeParser:
 
         return merged_nodes
 
-    @staticmethod
-    def _set_sibling_relations(id_map: Dict[str, Document]):
+    def _set_sibling_relations(self):
         """统一设置兄弟关系"""
-        for node_id, node in id_map.items():
+        for node in self.documents:
             if node.metadata["node_type"] in [NodeType.ROOT, NodeType.SECTION]:
                 child_ids = node.metadata["child_ids"]
                 for i, child_id in enumerate(child_ids):
-                    child = id_map[child_id]
+                    child = self.id_map[child_id]
                     child.metadata["left_sibling"] = child_ids[i - 1] if i > 0 else ''
                     child.metadata["right_sibling"] = child_ids[i + 1] if i < len(child_ids) - 1 else ''
