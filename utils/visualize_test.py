@@ -38,7 +38,7 @@ parser = MarkdownTreeParser(
 
 # 3. 解析所有 Markdown 文件
 docs = []
-for file in ["../raw_data/文档_参考_安装工具_Kubeadm_kubeadm init.md"]:
+for file in ["../raw_data/文档_参考_Kubernetes API_工作负载资源_Pod.md"]:
     print(f"正在处理：{file}, 已完成：{len(docs)}")
     if file.endswith(".md"):
         file_path = os.path.join(RAW_DATA_DIR, file)
