@@ -86,6 +86,11 @@ class MarkdownTreeParser:
         body_content = ''.join(lines[4:])
         processed_content, extracted_blocks = extract_blocks(body_content)
 
+        # 2. 在这里插入 API 块预处理逻辑
+        #    这会把 #### HTTP 请求 变成 **HTTP 请求**
+        #    从而避免后续的 _build_subtree 将其拆分
+        processed_content = MarkdownTreeParser.preprocess_api_blocks(processed_content)
+
         # 创建根节点
         file_name = os.path.basename(file_path).removesuffix('.md')
         root_doc = MarkdownTreeParser._create_document_node(
@@ -552,3 +557,106 @@ class MarkdownTreeParser:
                     child = self.id_map[child_id]
                     child.metadata["left_sibling"] = child_ids[i - 1] if i > 0 else ''
                     child.metadata["right_sibling"] = child_ids[i + 1] if i < len(child_ids) - 1 else ''
+
+    @classmethod
+    def preprocess_api_blocks(cls, content: str) -> str:
+        """
+        预处理Markdown内容：
+        识别 API 文档块（父标题 -> [HTTP 请求, 参数, 响应]），
+        将这些特定的子标题从 Header (#) 降级为 Bold (**)，
+        防止它们被切分为独立的文档块。
+        """
+        lines = content.split('\n')
+
+        # 1. 定义核心关键词白名单 (Exact Set)
+        # 包含标准写法、英文写法、以及你发现的文档笔误/变种
+        CORE_KEYWORDS = {
+            # 标准中文
+            "HTTP 请求", "参数", "响应",
+            # 标准英文
+            "HTTP Request", "Parameters", "Response",
+            # 常见的简写
+            "HTTP",
+            # 你发现的文档错误/变种 (在此处明确列出，以避免模糊匹配误伤)
+            "HTTP 参数",
+        }
+
+        # 正则：匹配标题行
+        header_pattern = re.compile(r'^(#+)\s+(.*)')
+
+        # 状态机变量
+        current_parent_level = 0
+        candidate_indices = []  # 记录当前块内待降级的行索引
+        found_keywords = set()  # 记录当前块内已找到的关键词
+
+        # 创建副本用于修改
+        processed_lines = lines[:]
+
+        for i, line in enumerate(lines):
+            match = header_pattern.match(line)
+            if match:
+                level = len(match.group(1))
+                raw_text = match.group(2).strip()
+                # 去除可能的加粗、反引号，用于比对
+                clean_text = raw_text.replace('**', '').replace('`', '').strip()
+
+                # 【修改点】直接精确查找，不使用 startswith
+                is_keyword = clean_text in CORE_KEYWORDS
+
+                # --- 状态机逻辑 ---
+
+                # 1. 边界检查：遇到同级或更高级标题
+                # 如果是关键词（即使层级错了，如 ### 参数），也不截断（豁免）
+                should_close_block = (current_parent_level > 0 and
+                                      level <= current_parent_level and
+                                      not is_keyword)
+
+                if should_close_block:
+                    # 结算上一块
+                    # 只要命中2个及以上关键词，视为有效 API 块
+                    if len(found_keywords) >= 2:
+                        for idx in candidate_indices:
+                            m = header_pattern.match(processed_lines[idx])
+                            if m:
+                                txt = m.group(2).strip()
+                                processed_lines[idx] = f"**{txt}**"
+
+                    # 重置状态
+                    current_parent_level = 0
+                    candidate_indices = []
+                    found_keywords = set()
+
+                # 2. 块内处理 / 新块开启
+                if current_parent_level == 0:
+                    # 开启新块记录
+                    # 只有非关键词的标题才能作为父标题
+                    if level >= 2 and not is_keyword:
+                        current_parent_level = level
+                else:
+                    # 在块内部 (或者是被豁免的同级关键词)
+                    if is_keyword:
+                        # 归一化：为了统计凑齐了几个要素，我们将所有 HTTP 变种都记为 "HTTP"
+                        if "HTTP" in clean_text:
+                            key_type = "HTTP"
+                        else:
+                            key_type = clean_text
+
+                        found_keywords.add(key_type)
+                        candidate_indices.append(i)
+
+                    elif not found_keywords:
+                        # 下沉逻辑：
+                        # 遇到非关键词标题，且当前还没收集到任何关键词
+                        # 说明之前的 parent 太浅了，这个更深的标题才是真正的开始
+                        current_parent_level = level
+                        candidate_indices = []
+
+        # 循环结束后的收尾检查
+        if current_parent_level > 0 and len(found_keywords) >= 2:
+            for idx in candidate_indices:
+                m = header_pattern.match(processed_lines[idx])
+                if m:
+                    txt = m.group(2).strip()
+                    processed_lines[idx] = f"**{txt}**"
+
+        return '\n'.join(processed_lines)
