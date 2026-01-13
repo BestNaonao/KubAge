@@ -10,7 +10,7 @@ from transformers import AutoTokenizer
 from utils import MarkdownTreeParser, encode_document_for_milvus, decode_document_from_milvus
 
 
-def chunk_by_token(documents, max_tokens_per_batch=512):  # 例如 512 或 1024
+def batch_by_token(documents, max_tokens_per_batch=512):  # 例如 512 或 1024
     """
     根据token数量对文档进行分批
     
@@ -141,7 +141,7 @@ def build_knowledge_base(
 
     max_token = 0
     doc_count = 0
-    for i, batch in enumerate(chunk_by_token(docs, max_tokens_per_batch)):
+    for i, batch in enumerate(batch_by_token(docs, max_tokens_per_batch)):
         # 编码文档以适应Milvus存储
         encoded_batch = [encode_document_for_milvus(doc) for doc in batch]
         titles = [doc.metadata.get('title', '') for doc in encoded_batch]
