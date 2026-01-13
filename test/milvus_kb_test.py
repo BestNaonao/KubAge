@@ -1,5 +1,4 @@
 import os
-import re
 
 from dotenv import load_dotenv, find_dotenv
 from pymilvus import Collection, connections
@@ -10,7 +9,6 @@ MILVUS_HOST = os.getenv('MILVUS_HOST')
 MILVUS_PORT = os.getenv('MILVUS_PORT')
 MILVUS_USER = os.getenv('MILVUS_USER')
 MILVUS_PASSWORD = os.getenv('MILVUS_ROOT_PASSWORD')
-
 
 
 def content_test(collection_name):
