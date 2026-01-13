@@ -27,85 +27,54 @@ def content_test(collection_name):
     # 确保加载了（如果未加载）
     collection.load()
 
-    # 分页查询所有数据（避免一次性拉取太多）
-    page_size = 5000
-    offset = 0
-    all_entities = []
-
-    while True:
-        try:
-            res = collection.query(
-                expr="",  # 空 expr 表示返回所有
-                output_fields=["pk", "text", "right_sibling", "child_ids", "source", "token_count"],
-                offset=offset,
-                limit=page_size,
-                consistency_level="Strong"
-            )
-            if not res:
-                break
-            all_entities.extend(res)
-            if len(res) < page_size:
-                break
-            offset += page_size
-        except Exception as e:
-            print(f"Query failed at offset {offset}: {e}")
-            break
-
-    def filter_by_reg(reg):
-        pattern = re.compile(reg)
-        return [ent for ent in all_entities if pattern.search(ent.get("text", ""))]
-
-    # 存储结果
-    matched_records = filter_by_reg(r'#{1,}\s+接下来')
-    all_empty = True
-    for entity in matched_records:
-        right_sibling = entity.get("right_sibling")
-        child_ids = entity.get("child_ids")
-
-        rs_empty = (
-                right_sibling is None or
-                right_sibling == "" or
-                (isinstance(right_sibling, str) and right_sibling.lower() == "null")
+    def condition_query(condition: str):
+        results = collection.query(
+            expr=condition,
+            output_fields=["pk", "text", "right_sibling", "child_ids", "source", "token_count", "title"],
+            consistency_level="Strong"
         )
+        print(f"共 {len(results)} 条")
+        for res in results[:10]:
+            print(res)
+        return results
 
-        ci_empty = (
-                child_ids is None or
-                child_ids == [] or
-                child_ids == "" or
-                (isinstance(child_ids, str) and child_ids.strip() in ("", "[]", "null"))
-        )
+    print("=========“接下来”和“另请参见”导航章节测试")
+    condition_query("text like '%# 接下来%'")
+    condition_query("text like '%# 另请参见%'")
 
-        print(f"ID: {entity['pk']}")
-        print(f"Right sibling empty: {rs_empty} (raw: {right_sibling})")
-        print(f"Child IDs empty: {ci_empty} (raw: {child_ids})")
-        print("-" * 60)
-        if not rs_empty or not ci_empty:
-            all_empty = False
+    print("=========API块测试")
 
-    # 输出结果
-    print(f"Found {len(matched_records)} records matching the pattern.")
-    print(f"All 'Next' records has no right sibling and no children: {all_empty}")
-    print("-" * 60)
-    # 检查接下来、另请参见是否出现在同一源文档中
-    matched_next = filter_by_reg(r'#{1,}\s+接下来')
-    matched_refer = filter_by_reg(r'#{1,}\s+另请参见')
-    next_source_set = set()
-    refer_source_set = set()
-    for source in [entity.get("source") for entity in matched_next]:
-        if not source in next_source_set:
-            next_source_set.add(source)
-        else:
-            print(f"Duplicate Next entity found: {source}")
-    print("-" * 60 + str(len(matched_next)))
-    for source in [entity.get("source") for entity in matched_refer]:
-        if not source in refer_source_set:
-            refer_source_set.add(source)
-        else:
-            print(f"Duplicate Reference entity found: {source}")
-    print("-" * 60 + str(len(matched_refer)))
-    for next_source in next_source_set:
-        if next_source in refer_source_set:
-            print(f"Duplicate Next and Reference entity found: {next_source}")
+    condition_1 = "(text like '%# HTTP%')"
+    condition_2 = "(text like '%# 参数%' or text like '%# Parameter%')"
+    condition_3 = "(text like '%# 响应%' or text like '%# Response%')"
+
+    condition_4 = "(text like '%**HTTP%')"
+    condition_5 = "(text like '%**参数**%' or text like '%**Parameter%')"
+    condition_6 = "(text like '%**响应**%' or text like '%**Response%')"
+
+    condition_7 = "(title like '文档_参考_Kubernetes API%')"
+
+    def satisfy_2_at_least(c1, c2, c3):
+        return f"(({c1} and {c2}) or ({c2} and {c3}) or ({c3} and {c1}))"
+
+    satisfy_1_2_3_al2 = satisfy_2_at_least(condition_1, condition_2, condition_3)
+    satisfy_4_5_6_al2 = satisfy_2_at_least(condition_4, condition_5, condition_6)
+
+    def satisfy_only_one(c1, c2, c3):
+        return f"(({c1} and !{c2} and !{c3}) or (!{c1} and {c2} and !{c3}) or (!{c1} and !{c2} and {c3}))"
+
+    print("---------至少满足条件1、2、3中的两个")
+    condition_query(f"{satisfy_1_2_3_al2}")
+    print("---------只满足条件1、2、3中的一个，并且满足条件7")
+    condition_query(f"{satisfy_only_one(condition_1, condition_2, condition_3)} and {condition_7}")
+    print("---------至少满足条件4、5、6中的两个")
+    condition_query(f"{satisfy_4_5_6_al2}")
+    print("---------至少满足条件4、5、6中的两个，并且不满足条件7")
+    condition_query(f"{satisfy_4_5_6_al2} and !{condition_7}")
+    print("---------只满足条件4、5、6中的一个，并且满足条件7")
+    condition_query(f"{satisfy_only_one(condition_4, condition_5, condition_6)} and {condition_7}")
+    print("---------只满足条件4、5、6中的一个，并且不满足条件7")
+    condition_query(f"{satisfy_only_one(condition_4, condition_5, condition_6)} and !{condition_7}")
 
 
 if __name__ == "__main__":
