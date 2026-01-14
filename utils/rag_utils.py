@@ -1,7 +1,19 @@
+import uuid
+from typing import List
+
 from langchain_core.documents import Document
 from langchain_milvus import Milvus
+
+from . import decode_document_from_milvus
 from .metadata_utils import decode_metadata_from_milvus
 
+
+def validate_node_id(node_id: str):
+    try:
+        if uuid.UUID(node_id).version != 5:
+            raise ValueError("Invalid node id.")
+    except ValueError as e:
+        raise ValueError("Invalid node id.")
 
 def get_full_node_content(milvus: Milvus, node_id: str) -> str:
     """
@@ -22,8 +34,7 @@ def get_full_node_content(milvus: Milvus, node_id: str) -> str:
     node = results[0]
     
     # 解码元数据以恢复child_ids列表等字段
-    decoded_metadata = decode_metadata_from_milvus(node.metadata)
-    node.metadata = decoded_metadata
+    node.metadata = decode_metadata_from_milvus(node.metadata)
     
     # 先序遍历：先访问当前节点
     contents = [node.page_content.strip()]
@@ -38,3 +49,20 @@ def get_full_node_content(milvus: Milvus, node_id: str) -> str:
             contents.append(child_content)
     
     return "\n\n".join(contents)
+
+def query_nodes_with_similarity(milvus: Milvus, query: str, k: int, expr: str) -> List[Document]:
+    """
+    使用相似度搜索查询节点
+
+    Args:
+        milvus: Milvus向量数据库实例
+        query: 查询文本
+        k: 返回的节点数量
+        expr: 查询条件
+    
+    Returns:
+        List[Document]: 查询结果
+    """
+    results = milvus.similarity_search(query, k=k, param={"metric_type": "COSINE", "params": {"nprobe": 16}}, expr=expr)
+    nodes = [decode_document_from_milvus(result) for result in results]
+    return nodes
