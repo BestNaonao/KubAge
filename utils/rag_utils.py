@@ -63,6 +63,19 @@ def query_nodes_with_similarity(milvus: Milvus, query: str, k: int, expr: str) -
     Returns:
         List[Document]: 查询结果
     """
-    results = milvus.similarity_search(query, k=k, param={"metric_type": "COSINE", "params": {"nprobe": 16}}, expr=expr)
+    results = milvus.similarity_search(
+        query, k=k,
+        param={"metric_type": "COSINE", "params": {"nprobe": 16}},
+        expr=expr
+    )
     nodes = [decode_document_from_milvus(result) for result in results]
     return nodes
+
+def get_root_node(milvus: Milvus, node: Document) -> Document | None:
+    if node.metadata["node_type"] == "ROOT":
+        return node
+    results = milvus.search_by_metadata(expr=f"source == '{node.metadata["source"]}' and node_type == 'root'", limit=1)
+    if not results:
+        return None
+
+    return decode_document_from_milvus(results[0])
