@@ -2,6 +2,7 @@ import json
 import os
 import traceback
 import time
+from pathlib import Path
 
 import torch
 from dotenv import find_dotenv, load_dotenv
@@ -190,7 +191,7 @@ def build_knowledge_base(
     for file in os.listdir(markdown_folder_path):
         if file.endswith(".md"):
             print(f"\r处理文件: {file} | 已累计文档: {len(docs)}", end="", flush=True)
-            file_path = os.path.join(markdown_folder_path, file)
+            file_path = Path(markdown_folder_path) / file
             # 注意：解析过程可能会很长
             docs.extend(parser.parse_markdown_to_tree(file_path))
             torch.cuda.empty_cache()
