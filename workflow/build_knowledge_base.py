@@ -120,7 +120,7 @@ def build_knowledge_base(
         embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",
         sparse_model_path="BAAI/bge-m3",  # 新增：稀疏向量模型路径
         markdown_folder_path="../raw_data",
-        collection_name="knowledge_base_v1",
+        collection_name="knowledge_base_v2",
         max_tokens_per_batch=2048,
         min_chunk_size=256,
         core_chunk_size=512,
@@ -224,7 +224,7 @@ def build_knowledge_base(
         text_csr = sparse_ef.encode_documents(texts)["sparse"]
         title_csr = sparse_ef.encode_documents(titles)["sparse"]
 
-        # [关键修改] 将 CSR 矩阵转换为 list of dicts
+        # 将 CSR 矩阵转换为 list of dicts
         text_sparse_list = csr_to_milvus_format(text_csr)
         title_sparse_list = csr_to_milvus_format(title_csr)
 
