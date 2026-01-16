@@ -14,17 +14,7 @@ MILVUS_PORT = os.getenv('MILVUS_PORT')
 MILVUS_USER = os.getenv('MILVUS_USER')
 MILVUS_PASSWORD = os.getenv('MILVUS_ROOT_PASSWORD')
 
-def milvus_store(embedding_model_path, collection_name, index_params=None, search_params=None) -> Milvus:
-    embedding_model = HuggingFaceEmbeddings(
-        model_name=embedding_model_path,
-        model_kwargs={
-            "device": "cuda",  # 如果无 GPU，改为 "cpu"
-            "trust_remote_code": True,  # Qwen 必须开启
-        },
-        encode_kwargs={
-            "normalize_embeddings": True  # Qwen 推荐开启，用于 COSINE 相似度
-        }
-    )
+def milvus_store(embedding_model, collection_name, index_params=None, search_params=None) -> Milvus:
     return Milvus(
         embedding_function=embedding_model,
         connection_args={
@@ -38,10 +28,10 @@ def milvus_store(embedding_model_path, collection_name, index_params=None, searc
         search_params=search_params,
     )
 
-def basic_test(embedding_model_path, collection_name):
+def basic_test(embedding_model, collection_name):
     # 连接到 Milvus
     vector_store = milvus_store(
-        embedding_model_path,
+        embedding_model,
         collection_name,
         # 注意：index_params 在 add_texts 首次调用时才会生效（如果集合不存在）
         index_params={
@@ -107,8 +97,8 @@ def basic_test(embedding_model_path, collection_name):
     # 刷新
     collection.flush()
 
-def kb_test(embedding_model_path, collection_name):
-    vector_store = milvus_store(embedding_model_path, collection_name)
+def kb_test(embedding_model, collection_name):
+    vector_store = milvus_store(embedding_model, collection_name)
 
     def condition_query(expr: str):
         docs = vector_store.search_by_metadata(
@@ -162,9 +152,48 @@ def rag_utils_test(embedding_model_path, collection_name):
     vector_store = milvus_store(embedding_model_path, collection_name)
     print(get_full_node_content(vector_store, "9a0c26a5-decf-5184-b5fc-9a2e7fce0cd6"))
 
+def title_test(embedding_model_path, collection_name):
+    vector_store = milvus_store(embedding_model_path, collection_name)
+    root_docs = vector_store.search_by_metadata(
+        expr="node_type == 'root'",
+        limit = 1000
+    )
+    invalid_root_titles = []
+    for doc in root_docs:
+        title_from_source = doc.metadata['source'].split('\\')[-1].split('.md')[0]
+        if title_from_source != doc.metadata['title']:
+            invalid_root_titles.append(title_from_source)
+    print(f"标题非法的根节点标题 共有 {len(invalid_root_titles)} 个")
+    for invalid_title in invalid_root_titles:
+        print(invalid_title)
 
-if __name__ == "__main__":
-    embedding = "../models/Qwen/Qwen3-Embedding-0.6B"   # 相对路径：从当前脚本所在目录出发
-    # basic_test(embedding, "my_collection")
-    # kb_test(embedding, "knowledge_base_v1")
-    rag_utils_test(embedding, "knowledge_base_v1")
+def nav_test(embedding_model_path, collection_name):
+    vector_store = milvus_store(embedding_model_path, collection_name)
+    invalid_nav_docs = vector_store.search_by_metadata(
+        expr="node_type != 'root' and (nav_next_step != '' or nav_see_also != '')",
+        limit = 1000
+    )
+    print(f"是否包含非根节点的导航内容: {len(invalid_nav_docs) != 0}")
+
+
+def main():
+    embedding_path = "../models/Qwen/Qwen3-Embedding-0.6B"   # 相对路径：从当前脚本所在目录出发
+    embedding_model = HuggingFaceEmbeddings(
+        model_name=embedding_path,
+        model_kwargs={
+            "device": "cuda",  # 如果无 GPU，改为 "cpu"
+            "trust_remote_code": True,  # Qwen 必须开启
+        },
+        encode_kwargs={
+            "normalize_embeddings": True  # Qwen 推荐开启，用于 COSINE 相似度
+        }
+    )
+    # basic_test(embedding_model, "my_collection")
+    # kb_test(embedding_model, "knowledge_base_v1")
+    # rag_utils_test(embedding_model, "knowledge_base_v1")
+    title_test(embedding_model, "knowledge_base_v1")
+    nav_test(embedding_model, "knowledge_base_v1")
+
+
+if __name__ == '__main__':
+    main()
