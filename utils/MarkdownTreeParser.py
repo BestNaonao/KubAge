@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 from enum import Enum
+from pathlib import Path
 from typing import Dict, List, Any
 from queue import PriorityQueue
 
@@ -67,7 +68,7 @@ class MarkdownTreeParser:
         tokenized = self.tokenizer.tokenize(content)
         return len(tokenized)
 
-    def parse_markdown_to_tree(self, file_path: str) -> List[Document]:
+    def parse_markdown_to_tree(self, file_path: Path) -> List[Document]:
         """
         将Markdown文档解析为文档块树
 
@@ -95,7 +96,7 @@ class MarkdownTreeParser:
         file_name = os.path.basename(file_path).removesuffix('.md')
         root_doc = MarkdownTreeParser._create_document_node(
             content=processed_content.strip(),
-            source=file_path,
+            source=file_path.as_posix(),
             parent_id='',
             level=0,
             title=file_name,
