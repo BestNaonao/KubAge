@@ -189,7 +189,7 @@ def main():
         }
     )
     # basic_test(embedding_model, "my_collection")
-    # kb_test(embedding_model, "knowledge_base_v1")
+    kb_test(embedding_model, "knowledge_base_v1")
     # rag_utils_test(embedding_model, "knowledge_base_v1")
     title_test(embedding_model, "knowledge_base_v1")
     nav_test(embedding_model, "knowledge_base_v1")
