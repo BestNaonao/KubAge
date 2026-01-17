@@ -1,13 +1,15 @@
 import json
 import os
 import traceback
+from pathlib import Path
 
 import torch
 from dotenv import find_dotenv, load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 from transformers import AutoTokenizer
-from utils import MarkdownTreeParser, encode_document_for_milvus, decode_document_from_milvus
+
+from utils import MarkdownTreeParser, encode_document_for_milvus
 
 
 def batch_by_token(documents, max_tokens_per_batch=512):  # 例如 512 或 1024
@@ -114,7 +116,7 @@ def build_knowledge_base(
         print(f"\r正在处理：{file}, 已完成：{len(docs)}", end="", flush=True)
         if file.endswith(".md"):
             file_path = os.path.join(markdown_folder_path, file)
-            docs.extend(parser.parse_markdown_to_tree(file_path))
+            docs.extend(parser.parse_markdown_to_tree(Path(file_path)))
             torch.cuda.empty_cache()
     total = len(docs)
 
