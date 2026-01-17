@@ -101,7 +101,7 @@ def decode_hit_to_document(hit: Hit, content_field: str = "text") -> Document:
         content_field: 存储文本内容的字段名
     """
     # 1. 获取实体内容 (类似于字典)
-    entity = hit.entity
+    entity = hit['entity']
 
     # 2. 提取正文，如果未指定 output_fields，可能拿不到 text
     page_content = entity.get(content_field, "")
