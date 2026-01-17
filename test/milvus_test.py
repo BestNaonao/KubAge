@@ -97,11 +97,10 @@ def basic_test(embedding_model, collection_name):
     # 刷新
     collection.flush()
 
-def kb_test(embedding_model, collection_name):
-    vector_store = milvus_store(embedding_model, collection_name)
+def kb_test(milvus: Milvus):
 
     def condition_query(expr: str):
-        docs = vector_store.search_by_metadata(
+        docs = milvus.search_by_metadata(
             expr=expr,
             limit=500
         )
@@ -148,32 +147,32 @@ def kb_test(embedding_model, collection_name):
     print("---------只满足条件4、5、6中的一个，并且不满足条件7")
     condition_query(f"{satisfy_only_one(condition_4, condition_5, condition_6)} and !{condition_7}")
 
-def rag_utils_test(embedding_model_path, collection_name):
-    vector_store = milvus_store(embedding_model_path, collection_name)
-    print(get_full_node_content(vector_store, "9a0c26a5-decf-5184-b5fc-9a2e7fce0cd6"))
-
-def title_test(embedding_model_path, collection_name):
-    vector_store = milvus_store(embedding_model_path, collection_name)
-    root_docs = vector_store.search_by_metadata(
+def title_test(milvus: Milvus):
+    print("=========标题字段测试")
+    root_docs = milvus.search_by_metadata(
         expr="node_type == 'root'",
         limit = 1000
     )
     invalid_root_titles = []
     for doc in root_docs:
-        title_from_source = doc.metadata['source'].split('\\')[-1].split('.md')[0]
+        title_from_source = doc.metadata['source'].split('/')[-1].split('.md')[0]
         if title_from_source != doc.metadata['title']:
             invalid_root_titles.append(title_from_source)
     print(f"标题非法的根节点标题 共有 {len(invalid_root_titles)} 个")
     for invalid_title in invalid_root_titles:
         print(invalid_title)
 
-def nav_test(embedding_model_path, collection_name):
-    vector_store = milvus_store(embedding_model_path, collection_name)
-    invalid_nav_docs = vector_store.search_by_metadata(
+def nav_test(milvus: Milvus):
+    print("=========导航章节测试")
+    invalid_nav_docs = milvus.search_by_metadata(
         expr="node_type != 'root' and (nav_next_step != '' or nav_see_also != '')",
         limit = 1000
     )
     print(f"是否包含非根节点的导航内容: {len(invalid_nav_docs) != 0}")
+
+def rag_utils_test(milvus: Milvus):
+    print("=========RAG工具测试")
+    print(get_full_node_content(milvus, "9a0c26a5-decf-5184-b5fc-9a2e7fce0cd6"))
 
 
 def main():
@@ -189,10 +188,11 @@ def main():
         }
     )
     # basic_test(embedding_model, "my_collection")
-    kb_test(embedding_model, "knowledge_base_v1")
-    # rag_utils_test(embedding_model, "knowledge_base_v1")
-    title_test(embedding_model, "knowledge_base_v1")
-    nav_test(embedding_model, "knowledge_base_v1")
+    kb_v2_store = milvus_store(embedding_model, "knowledge_base_v2")
+    kb_test(kb_v2_store)
+    title_test(kb_v2_store)
+    nav_test(kb_v2_store)
+    rag_utils_test(kb_v2_store)
 
 
 if __name__ == '__main__':
