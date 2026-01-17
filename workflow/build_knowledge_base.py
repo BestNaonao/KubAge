@@ -98,7 +98,7 @@ def batch_by_token(documents, max_tokens_per_batch=512):  # 例如 512 或 1024
 
 def build_knowledge_base(
         embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",
-        sparse_model_path="BAAI/bge-m3",  # 新增：稀疏向量模型路径
+        sparse_model_path="BAAI/bge-m3",  # 稀疏向量模型路径
         markdown_folder_path="../raw_data",
         collection_name="knowledge_base_v2",
         max_tokens_per_batch=2048,
