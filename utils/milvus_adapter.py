@@ -77,3 +77,23 @@ def decode_document_from_milvus(encoded_doc: Document) -> Document:
     if hasattr(encoded_doc, 'id'):
         setattr(decoded_doc, 'id', encoded_doc.id)
     return decoded_doc
+
+def csr_to_milvus_format(csr_matrix):
+    """
+    将 Scipy CSR 矩阵高效转换为 Milvus 接受的字典列表格式
+    格式: [{token_id: weight, ...}, ...]
+    """
+    results = []
+    # 使用 CSR 内部结构进行遍历，速度极快且不会报错
+    for i in range(csr_matrix.shape[0]):
+        start = csr_matrix.indptr[i]
+        end = csr_matrix.indptr[i + 1]
+
+        # 提取当前行的非零元素索引和值
+        indices = csr_matrix.indices[start:end]
+        data = csr_matrix.data[start:end]
+
+        # 转换为字典 {int: float}
+        row_dict = {int(k): float(v) for k, v in zip(indices, data)}
+        results.append(row_dict)
+    return results

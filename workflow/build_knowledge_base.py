@@ -19,7 +19,7 @@ from pymilvus import (
 )
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
-from utils import MarkdownTreeParser, encode_document_for_milvus
+from utils import MarkdownTreeParser, encode_document_for_milvus, csr_to_milvus_format
 
 
 # ==========================================
@@ -95,26 +95,6 @@ def batch_by_token(documents, max_tokens_per_batch=512):  # 例如 512 或 1024
         batches.append(current_batch)
 
     return batches
-
-def csr_to_milvus_format(csr_matrix):
-    """
-    将 Scipy CSR 矩阵高效转换为 Milvus 接受的字典列表格式
-    格式: [{token_id: weight, ...}, ...]
-    """
-    results = []
-    # 使用 CSR 内部结构进行遍历，速度极快且不会报错
-    for i in range(csr_matrix.shape[0]):
-        start = csr_matrix.indptr[i]
-        end = csr_matrix.indptr[i + 1]
-
-        # 提取当前行的非零元素索引和值
-        indices = csr_matrix.indices[start:end]
-        data = csr_matrix.data[start:end]
-
-        # 转换为字典 {int: float}
-        row_dict = {int(k): float(v) for k, v in zip(indices, data)}
-        results.append(row_dict)
-    return results
 
 def build_knowledge_base(
         embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",

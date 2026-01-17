@@ -5,7 +5,7 @@ from langchain_core.documents import Document
 from langchain_milvus import Milvus
 
 from . import decode_document_from_milvus
-from .metadata_utils import decode_metadata_from_milvus
+from .milvus_adapter import decode_metadata_from_milvus
 
 
 def validate_node_id(node_id: str):

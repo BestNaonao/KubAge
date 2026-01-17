@@ -1,10 +1,11 @@
 """Utils package for the project."""
 
-from .metadata_utils import (
+from .milvus_adapter import (
     encode_metadata_for_milvus,
     decode_metadata_from_milvus,
     encode_document_for_milvus,
-    decode_document_from_milvus
+    decode_document_from_milvus,
+    csr_to_milvus_format
 )
 from .MarkdownTreeParser import MarkdownTreeParser, NodeType
 from .chunker_utils import extract_blocks, restore_blocks
@@ -19,5 +20,6 @@ __all__ = [
     "decode_metadata_from_milvus",
     "encode_document_for_milvus",
     "decode_document_from_milvus",
+    "csr_to_milvus_format",
     "convert_to_markdown"
 ]
