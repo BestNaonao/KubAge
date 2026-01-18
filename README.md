@@ -14,9 +14,15 @@ KubAge是一个基于Kubernetes文档构建的知识库系统，支持从爬虫�
 │   ├── MarkdownTreeParser.py # Markdown文档树解析器
 │   ├── metadata_utils.py     # 元数据处理工具
 │   ├── chunker_utils.py      # 文档切分工具
-│   └── html2md_utils.py      # HTML转Markdown工具
+│   ├── html2md_utils.py      # HTML转Markdown工具
+│   └── rag_utils.py          # RAG相关工具
+├── workflow/                # 工作流模块
+│   └── build_knowledge_base.py # 知识库构建工作流
+├── retriever/               # 检索器模块
+│   └── MilvusHybridRetriever.py # Milvus混合检索器
 ├── test/                    # 测试模块
-│   └── build_kb_test.py     # 知识库构建测试
+│   ├── build_kb_test.py     # 知识库构建测试
+│   └── retrieving_test.py   # 检索功能测试
 ├── requirements.txt         # 依赖包列表
 └── README.md               # 本说明文档
 ```
@@ -46,27 +52,29 @@ KubAge是一个基于Kubernetes文档构建的知识库系统，支持从爬虫�
   - 处理代码块、表格等特殊内容
 
 ### 4. 保存到Milvus
-- **工具**: `test/build_kb_test.py`
+- **工具**: `workflow/build_knowledge_base.py`
 - **功能**:
-  - 使用嵌入模型生成向量表示
+  - 使用密集向量（Qwen）和稀疏向量（BGE-M3）生成双重嵌入表示
   - 将文档数据存储到Milvus向量数据库
   - 支持批量处理和错误恢复
 
 ## 数据库结构
 
-Milvus知识库包含16个字段，具体如下：
+Milvus知识库采用混合检索方案，包含以下字段：
 
 | 字段名 | 字段类型 | 说明 |
 |--------|----------|------|
+| pk | VarChar | 主键 |
 | text | VarChar | 文档文本内容 |
-| pk | Int64 | 主键 |
-| vector | FloatVector | 文档向量表示 |
+| vector | FloatVector | 文本的密集向量表示（Qwen生成） |
+| sparse_vector | SparseFloatVector | 文本的稀疏向量表示（BGE-M3生成） |
+| title_sparse | SparseFloatVector | 标题的稀疏向量表示（BGE-M3生成） |
 | source | VarChar | 源文件路径 |
+| title | VarChar | 节点标题 |
 | parent_id | VarChar | 父节点ID |
 | child_ids | VarChar | 子节点ID列表（JSON格式） |
 | node_type | VarChar | 节点类型（ROOT、SECTION、CONTAINER、LEAF） |
 | level | Int64 | 节点层级 |
-| title | VarChar | 节点标题 |
 | token_count | Int64 | token数量 |
 | left_sibling | VarChar | 左兄弟节点ID |
 | right_sibling | VarChar | 右兄弟节点ID |
@@ -80,11 +88,55 @@ Milvus知识库包含16个字段，具体如下：
 | 索引名称 | 索引类型 | 索引参数 |
 |----------|----------|----------|
 | vector | FLAT/HNSW | 根据配置决定，metric_type: COSINE |
+| sparse_vector | SPARSE_INVERTED_INDEX | metric_type: IP, drop_ratio_build: 0.2 |
+| title_sparse | SPARSE_INVERTED_INDEX | metric_type: IP, drop_ratio_build: 0.2 |
 | pk | 自动 | 主键索引 |
 | source | 二级索引 | 用于快速查找源文档 |
 | node_type | 二级索引 | 用于按节点类型筛选 |
 | level | 二级索引 | 用于按层级筛选 |
 | title | 二级索引 | 用于标题搜索 |
+
+## 检索器介绍
+
+### MilvusHybridRetriever
+- **位置**: `retriever/MilvusHybridRetriever.py`
+- **功能**:
+  - 支持密集向量检索（语义相似性）
+  - 支持稀疏向量检索（关键词匹配）
+  - 支持标题稀疏向量检索（标题匹配）
+  - 使用RRF（Reciprocal Rank Fusion）算法融合多路检索结果
+- **特点**: 结合了语义检索和关键词检索的优势，提高了检索准确性
+
+### 检索流程
+1. 输入查询文本
+2. 使用Qwen模型生成密集查询向量
+3. 使用BGE-M3模型生成稀疏查询向量
+4. 执行三路检索（文本密集+文本稀疏+标题稀疏）
+5. 使用RRF算法融合检索结果
+6. 返回融合后的排序结果
+
+## 工作流说明
+
+### 构建知识库工作流
+- **位置**: `workflow/build_knowledge_base.py`
+- **功能**:
+  - 连接Milvus数据库
+  - 初始化密集和稀疏嵌入模型
+  - 解析Markdown文档为树状结构
+  - 生成密集和稀疏向量
+  - 批量存入Milvus数据库
+  - 创建相应索引
+  - 加载集合供查询使用
+
+### 工作流执行步骤
+1. **连接数据库**: 建立与Milvus的连接
+2. **加载模型**: 初始化Qwen（密集）和BGE-M3（稀疏）嵌入模型
+3. **创建Schema**: 定义支持混合检索的数据表结构
+4. **解析文档**: 使用MarkdownTreeParser解析文档
+5. **生成向量**: 为每份文档生成密集和稀疏向量
+6. **批量存储**: 按token数量分批存入Milvus
+7. **创建索引**: 为各种向量字段创建相应索引
+8. **加载集合**: 将集合加载到内存中供查询使用
 
 ## 使用方法
 
@@ -105,13 +157,14 @@ crawler.run()
 
 ### 3. 构建知识库
 ```python
-from test.build_kb_test import build_knowledge_base
+from workflow.build_knowledge_base import build_knowledge_base
 
 # 使用默认参数构建知识库
 build_knowledge_base(
     embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",
+    sparse_model_path="BAAI/bge-m3",  # 稀疏向量模型路径
     markdown_folder_path="../raw_data",
-    collection_name="knowledge_base_v1",
+    collection_name="knowledge_base_v2",
     max_tokens_per_batch=2048,
     milvus_host="localhost",
     milvus_port=19530
@@ -122,9 +175,10 @@ build_knowledge_base(
 
 | 参数名 | 默认值 | 说明 |
 |--------|--------|------|
-| embedding_model_path | "../models/Qwen/Qwen3-Embedding-0.6B" | 嵌入模型路径 |
+| embedding_model_path | "../models/Qwen/Qwen3-Embedding-0.6B" | 密集嵌入模型路径 |
+| sparse_model_path | "BAAI/bge-m3" | 稀疏嵌入模型路径 |
 | markdown_folder_path | "../raw_data" | Markdown文件夹路径 |
-| collection_name | "knowledge_base_v1" | Milvus集合名 |
+| collection_name | "knowledge_base_v2" | Milvus集合名 |
 | max_tokens_per_batch | 2048 | 批量存入数据库的批token数量上限 |
 | min_chunk_size | 256 | 最小块大小 |
 | core_chunk_size | 512 | 核心块大小 |
@@ -135,6 +189,14 @@ build_knowledge_base(
 | milvus_password | 从环境变量读取 | Milvus密码 |
 | index_type | "FLAT" | 索引类型 |
 | metric_type | "COSINE" | 度量类型 |
+
+### 4. 使用检索器
+```python
+from test.retrieving_test import main
+
+# 运行检索测试
+main()
+```
 
 ## 配置文件
 
@@ -153,9 +215,11 @@ MILVUS_ROOT_PASSWORD=your_password
 2. **格式转换**: 将HTML转换为Markdown格式
 3. **文档解析**: 解析Markdown为树状结构
 4. **内容切分**: 按语义和大小切分文档块
-5. **向量化**: 使用嵌入模型生成向量表示
-6. **存储**: 将向量和元数据存储到Milvus
-7. **索引**: 为向量和元数据建立索引
+5. **密集向量化**: 使用Qwen模型生成密集向量表示
+6. **稀疏向量化**: 使用BGE-M3模型生成稀疏向量表示
+7. **存储**: 将向量和元数据存储到Milvus
+8. **索引**: 为向量和元数据建立索引
+9. **检索**: 使用混合检索器进行查询
 
 ## 依赖包
 
@@ -165,5 +229,6 @@ MILVUS_ROOT_PASSWORD=your_password
 - `transformers`: 模型和分词器
 - `torch`: PyTorch深度学习框架
 - `pymilvus`: Milvus Python SDK
+- `pymilvus[model]`: Milvus模型库（包含BGE-M3等）
 - `beautifulsoup4`: HTML解析
 - `python-dotenv`: 环境变量管理
