@@ -2,26 +2,14 @@ import asyncio
 import os
 from typing import TypedDict, Annotated
 
-from dotenv import load_dotenv, find_dotenv
 from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, ToolMessage
 from langchain_core.tools import Tool
-from langchain_openai.chat_models import ChatOpenAI
 from langgraph.graph import StateGraph, END, add_messages
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# ==================== 环境变量加载 ====================
-load_dotenv(find_dotenv())
-API_KEY = os.getenv('OPENAI_API_KEY')
-BASE_URL = os.getenv('OPENAI_BASE_URL')
-MODEL_NAME = os.getenv('OPENAI_MODEL_NAME')
+from utils.llm_factory import get_chat_model
 
-for var in [API_KEY, BASE_URL, MODEL_NAME]:
-    if var is None:
-        raise ValueError(f"环境变量缺失：{['API_KEY', 'BASE_URL', 'MODEL_NAME'][[API_KEY, BASE_URL, MODEL_NAME].index(var)]}")
-    print(f"{var} loaded (type: {type(var)})")
-
-os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 # ==================== 自定义状态类型 ====================
 class AgentState(TypedDict):
@@ -71,14 +59,8 @@ async def get_k8s_tools():
 # ==================== 构建 Agent ====================
 def build_agent(tools_list):
     # 初始化 LLM
-    llm = ChatOpenAI(
-        model=MODEL_NAME,
-        base_url=BASE_URL,
-        api_key=API_KEY,
-        temperature=0.6,
-        max_tokens=4096,
-        frequency_penalty=0,
-        top_p=0.95,
+    llm = get_chat_model(
+        temperature=0.5,
         extra_body={
             "top_k": 50,
             "thinking_budget": 32768,
