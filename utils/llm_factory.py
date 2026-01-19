@@ -13,12 +13,11 @@ MODEL_NAME = os.getenv('OPENAI_MODEL_NAME')
 for var in [API_KEY, BASE_URL, MODEL_NAME]:
     if var is None:
         raise ValueError(f"环境变量缺失：{['API_KEY', 'BASE_URL', 'MODEL_NAME'][[API_KEY, BASE_URL, MODEL_NAME].index(var)]}")
-    print(f"{var} loaded (type: {type(var)})")
 
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 
-def get_chat_model(temperature=0, max_token=4096, frequency_penalty=0, top_p=0.95, extra_body=None) -> ChatOpenAI:
+def get_chat_model(temperature=0, max_token=16384, frequency_penalty=0, top_p=0.95, extra_body=None) -> ChatOpenAI:
     """
     获取配置好的 ChatModel 实例
     """
