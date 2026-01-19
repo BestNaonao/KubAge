@@ -1,3 +1,4 @@
+import uuid
 from typing import List, Dict, Any
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
@@ -47,8 +48,6 @@ class RetrievalNode:
         # 不同的 query 可能会召回相同的文档片段，需要基于 pk 去重
         unique_docs = self._deduplicate_documents(all_retrieved_docs)
 
-        print(f"✅ Total unique documents retrieved: {len(unique_docs)}")
-
         # 4. 更新状态
         # 根据 state.py 的定义，我们返回字典，LangGraph 会将其合并到 State 中
         return {"retrieved_chunks": unique_docs}
@@ -67,7 +66,8 @@ class RetrievalNode:
 
             # 如果 retrieve 的时候没有拉取 pk，则使用内容的哈希兜底
             if not doc_id:
-                doc_id = hash(doc.page_content)
+                title = doc.metadata.get("title")
+                doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, title))
 
             if doc_id not in seen_ids:
                 seen_ids.add(doc_id)
