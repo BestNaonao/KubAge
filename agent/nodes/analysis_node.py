@@ -31,9 +31,6 @@ class AnalysisNode:
         current_input = messages[-1].content
         history = messages[:-1]
 
-        # --- 增加调试打印 ---
-        self.prompt_preview(current_input, history)
-
         # 调用预定义好的 Chain
         # config 参数允许透传 trace_id, callbacks 等信息
         try:
