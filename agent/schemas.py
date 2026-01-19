@@ -27,7 +27,7 @@ class ProblemAnalysis(BaseModel):
     """
     # 这一步是思维链的核心：强制模型先思考，再填空
     reasoning: str = Field(
-        description="思维链推理过程：1.结合历史消除歧义 2.分析意图 3.判断风险。"
+        description="思维链推理过程：1.结合历史消除歧义 2.分析意图 3.提取信息 4.判断风险。"
     )
 
     technical_summary: str = Field(
@@ -44,11 +44,11 @@ class ProblemAnalysis(BaseModel):
     )
 
     risk_level: RiskLevel = Field(
-        description="该操作或问题的风险等级。"
+        description="非空。该操作或问题的风险等级。"
     )
 
     search_queries: List[str] = Field(
-        description="用于在 Kubernetes 官方文档知识库中检索的 Query 列表。应包含同义词或底层概念（例如用户说'挂了'，检索'CrashLoopBackOff'）。"
+        description="非空。用于在 Kubernetes 官方文档知识库中检索的通用技术 Query 列表。要求: 1. 必须去除所有用户特定的实体名称 2. 必须转换为 Kubernetes 通用术语 3. 包含排错指南、命令参考、概念解释或其他类型的查询 4. 用【中文描述 + 英文术语】的混合形式表达。"
     )
 
     clarification_question: Optional[str] = Field(
