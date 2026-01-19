@@ -221,6 +221,86 @@ MILVUS_ROOT_PASSWORD=your_password
 8. **索引**: 为向量和元数据建立索引
 9. **检索**: 使用混合检索器进行查询
 
+## Agent架构
+
+### Agent概述
+
+KubAge新增了智能Agent模块，用于理解和分析用户在Kubernetes运维场景中的问题，并提供智能化的解决方案。Agent通过多轮对话理解用户意图，识别操作风险，并生成相应的检索Query来查询知识库。
+
+### Agent状态结构 (AgentState)
+
+Agent使用TypedDict定义状态结构，包含以下字段：
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| messages | List[BaseMessage] | 消息历史记录，使用operator.add实现追加模式 |
+| analysis | ProblemAnalysis \| None | 存储问题分析结果 |
+| retrieved_chunks | List[Document] \| None | 检索到的文档片段 |
+| generated_response | str \| None | 生成的响应结果 |
+| metadata | Dict[str, Any] \| None | 元数据信息 |
+| error | str \| None | 错误信息 |
+
+### Agent节点 (Nodes)
+
+目前Agent包含以下节点：
+
+#### 1. Analysis Node（分析节点）
+- **功能**: 对用户输入进行深度分析，提取关键信息
+- **输入**: 用户消息历史和当前输入
+- **输出**: 结构化的ProblemAnalysis对象
+- **处理流程**:
+  1. 使用ChatPromptTemplate构建提示模板
+  2. 通过LLM进行意图识别和实体提取
+  3. 生成检索Query和风险评估
+
+### 问题分析结构 (ProblemAnalysis)
+
+ProblemAnalysis是Pydantic模型，包含以下字段：
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| reasoning | str | 思维链推理过程：上下文消歧、意图分析、信息提取、风险判断 |
+| technical_summary | str | 用户问题的技术摘要，去除口语化表达 |
+| target_operation | OperationType | 目标操作类型 |
+| entities | List[NamedEntity] | 提取的关键命名实体列表 |
+| risk_level | RiskLevel | 操作风险等级 |
+| search_queries | List[str] | 用于知识库检索的Query列表 |
+| clarification_question | str \| None | 如果信息不足需要追问的问题 |
+
+### 操作类型 (OperationType)
+
+| 枚举值 | 说明 |
+|--------|------|
+| KNOWLEDGE_QA | 知识问答 |
+| RESOURCE_CREATION | 资源创建 |
+| RESOURCE_MUTATION | 资源变更 |
+| RESOURCE_DELETION | 资源删除 |
+| RESOURCE_INQUIRY | 资源查询 |
+| DIAGNOSIS | 故障诊断 |
+| CONFIGURE | 配置变更 |
+| SCALING | 性能调优——水平伸缩 |
+| RESTART | 重启运行时 |
+| ROLLOUT | 回滚 |
+| PROXY | 代理 |
+| OTHER | 其他操作 |
+
+### 风险等级 (RiskLevel)
+
+| 枚举值 | 说明 |
+|--------|------|
+| LOW | 信息查询，只读操作 |
+| MEDIUM | 配置检查、非破坏性调试 |
+| HIGH | 配置变更、重启 |
+| CRITICAL | 删除资源、危险操作 |
+
+### 工作流测试
+
+Agent工作流通过测试用例验证其功能，包括：
+- 上下文实体提取
+- 指代消歧（如"它"指代具体资源）
+- 意图识别与风险评估
+- 检索Query生成
+
 ## 依赖包
 
 主要依赖包包括：
@@ -232,3 +312,5 @@ MILVUS_ROOT_PASSWORD=your_password
 - `pymilvus[model]`: Milvus模型库（包含BGE-M3等）
 - `beautifulsoup4`: HTML解析
 - `python-dotenv`: 环境变量管理
+- `langgraph`: Agent工作流编排
+- `pydantic`: 数据验证和设置管理
