@@ -10,11 +10,19 @@ class RiskLevel(str, Enum):
     CRITICAL = "Critical"  # 删除资源、危险操作
 
 class OperationType(str, Enum):
-    FAULT_REPORT = "Fault_Report"  # 故障报告
-    PERFORMANCE_TUNING = "Performance_Tuning"  # 性能调优
-    CONFIG_CHANGE = "Config_Change"  # 配置变更
-    INFO_QUERY = "Info_Query"  # 信息查询
-    DANGEROUS_OP = "Dangerous_Op"  # 危险操作 (如删除)
+    KNOWLEDGE_QA = "Knowledge_QA"   # 知识问答
+
+    RESOURCE_CREATION = "Resource_Creation"     # 资源创建
+    RESOURCE_MUTATION = "Resource_Mutation"     # 资源变更
+    RESOURCE_DELETION = "Resource_Deletion"     # 资源删除
+    RESOURCE_INQUIRY = "Resource_Inquiry"       # 资源查询
+
+    DIAGNOSIS = "Diagnosis"     # 故障诊断
+    CONFIGURE = "Configure"     # 配置变更
+    SCALING = "Scaling"     # 性能调优——水平伸缩
+    RESTART = "Restart"     # 重启运行时
+    ROLLOUT = "Rollout"     # 回滚
+    PROXY = "Proxy"     # 代理
     OTHER = "Other"
 
 class NamedEntity(BaseModel):
