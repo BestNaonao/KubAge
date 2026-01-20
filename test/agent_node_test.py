@@ -71,20 +71,24 @@ def analysis_workflow_test(scenarios: List[TestScenario]):
             print("\n✅ Workflow Execution Succeeded!")
             print("=" * 60)
 
-            # 1. 验证思维链 (Reasoning)
-            print(f"🧠 [Reasoning]:\n{analysis_result.reasoning}\n")
+            # 1. 验证思维链 (Reasoning)和技术摘要
+            print(f"🧠 [Reasoning]:\n{analysis_result.reasoning}")
+            print(f"🔧 [Technical Summary]:\n{analysis_result.technical_summary}\n")
 
             # 2. 验证意图和实体
             print(f"🎯 [Target Operation]: {analysis_result.target_operation}")
             print(f"📦 [Entities]: {[f'{e.type}:{e.name}' for e in analysis_result.entities]}")
 
-            # 3. 验证生成的检索词 (Queries)
+            # 3. 验证风险等级
+            print(f"⚠️ [Risk Level]: {analysis_result.risk_level}")
+
+            # 4. 验证生成的检索词 (Queries)
             print(f"🔍 [Search Queries]:")
             for q in analysis_result.search_queries:
                 print(f"  - {q}")
 
-            # 4. 验证风险等级
-            print(f"⚠️ [Risk Level]: {analysis_result.risk_level}")
+            # 5. 验证追问问题
+            print(f"❓ [Clarification Question]: {analysis_result.clarification_question}")
 
             # 执行自定义断言验证
             print("🔍 Verifying results...")
