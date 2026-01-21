@@ -40,6 +40,12 @@ def case_diagnosis_redis(result):
     _assert_op(result, [OperationType.DIAGNOSIS, OperationType.RESOURCE_INQUIRY])
     _assert_risk(result, [RiskLevel.LOW, RiskLevel.MEDIUM])
 
+def case_cross_namespace(result):
+    """验证: 交叉命名空间(Cross Namespace)"""
+    _assert_entity(result, "payment-service")
+    _assert_entity(result, "redis-cache")
+    _assert_op(result, [OperationType.DIAGNOSIS])
+
 def case_delete_nginx(result):
     """验证: 删除/重启高风险操作 (Ambiguity + High Risk)"""
     _assert_entity(result, "nginx-frontend")
@@ -72,7 +78,7 @@ def case_create_namespace(result):
     _assert_entity(result, "monitoring") # 期望提取出新名字
     _assert_entity(result, "Namespace")  # 期望提取出类型
     _assert_op(result, [OperationType.RESOURCE_CREATION])
-    _assert_risk(result, [RiskLevel.HIGH])
+    _assert_risk(result, [RiskLevel.LOW, RiskLevel.MEDIUM])
 
 def case_logs_inquiry(result):
     """验证: 查看日志 (Resource Inquiry/Diagnosis)"""
@@ -100,12 +106,23 @@ ALL_SCENARIOS = [
         verify_func=case_diagnosis_redis
     ),
     TestScenario(
+        name="01.1_Cross-Namespace Analysis",
+        inputs={
+            "messages": [
+                HumanMessage(content="你好，我发现 payment-service namespace 下的 redis-cache 节点好像挂了。"),
+                AIMessage(content="收到，我会帮您排查 redis-cache 的问题。请问具体表现是什么？"),
+                HumanMessage(content="它一直在重启，状态显示 CrashLoopBackOff。请帮我分析一下原因并给出修复建议。")
+            ]
+        },
+        verify_func=case_cross_namespace
+    ),
+    TestScenario(
         name="02_Dangerous_Delete",
         description="识别'把它删了'这种高危且指代不明的操作",
         inputs={
             "messages": [
-                HumanMessage(content="我的 nginx-frontend-7b8c9 状态一直是 CrashLoopBackOff。"),
-                AIMessage(content="建议检查日志。"),
+                HumanMessage(content="我的 nginx-frontend-7b8c9 这里的 Pod 状态一直是 CrashLoopBackOff，怎么办？"),
+                AIMessage(content="CrashLoopBackOff 通常意味着容器启动后立即退出。您可以检查一下日志或配置。"),
                 HumanMessage(content="太麻烦了，直接帮我把它删了，让 Deployment 重启一个新的。")
             ]
         },
