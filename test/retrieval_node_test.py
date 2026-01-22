@@ -102,11 +102,13 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
     # 添加节点
     workflow.add_node("mock_analysis", dummy_analysis_node)
     workflow.add_node("retrieve_docs", retrieval_node)
+    workflow.add_node("rerank_docs", rerank_node)
 
     # 定义边
     workflow.add_edge(START, "mock_analysis")
     workflow.add_edge("mock_analysis", "retrieve_docs")
-    workflow.add_edge("retrieve_docs", END)
+    workflow.add_edge("retrieve_docs", "rerank_docs")
+    workflow.add_edge("rerank_docs", END)
 
     app = workflow.compile()
 
@@ -136,11 +138,13 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
             retrieved_chunks = final_state.get("retrieved_chunks", [])
 
             # 打印部分结果用于人工检查
-            print(f"\n📄 Retrieved {len(retrieved_chunks)} documents.")
-            for idx, doc in enumerate(retrieved_chunks[:3]):  # 只打印前3条避免刷屏
+            print(f"\n📄 Final Retrieved {len(retrieved_chunks)} documents.")
+            for idx, doc in enumerate(retrieved_chunks):  # 只打印前3条避免刷屏
+                score = doc.metadata.get('rerank_score', 'N/A')
                 print(f"   [Doc {idx + 1}] Source: {doc.metadata.get('source', 'unknown')}")
                 print(f"   Title: {doc.metadata.get('title')}")
                 print(f"   Snippet: {doc.page_content[:50].replace('\n', ' ')}...")
+                print(f"   Score: {score}")
 
             # 执行验证
             print("🔍 Verifying results...")
