@@ -2,19 +2,15 @@ from dataclasses import dataclass
 from typing import Dict, Any, Callable, Optional, List
 from langchain_core.documents import Document
 
-# 引入你的 Schema
 from agent.schemas import ProblemAnalysis, OperationType, RiskLevel, NamedEntity
 
 
 @dataclass
 class RetrievalTestScenario:
     name: str
-    # 这里我们直接准备好 AnalysisNode 应该产出的结果
-    mock_analysis: ProblemAnalysis
-    # 验证函数
+    mock_analysis: ProblemAnalysis  # 准备好的 AnalysisNode 的结果
     verify_func: Callable[[List[Document]], None]
     description: Optional[str] = None
-
 
 # ==========================================
 # 验证函数库
@@ -49,7 +45,7 @@ def _assert_content_contains(docs: List[Document], keyword: str):
 # 场景 1: 故障排查 (Contextual Diagnosis)
 analysis_diagnosis = ProblemAnalysis(
     reasoning="用户明确指出了具体的 Pod 名称 'redis-cart'...",
-    technical_summary="用户报告在 default 命名空间下的 redis-cart Pod 无法连接。",
+    technical_summary="用户报告在 default 命名空间下的 redis-cart Pod 昨天正常，今天突然无法连接，需要进行故障排查。",
     target_operation=OperationType.DIAGNOSIS,
     entities=[
         NamedEntity(name="redis-cart", type="Pod"),
@@ -60,7 +56,8 @@ analysis_diagnosis = ProblemAnalysis(
         "Pod 网络连接问题排查",
         "Pod 无法访问常见原因",
         "Kubernetes Service 连接 Pod 失败",
-        "Pod 状态异常诊断方法"
+        "Pod 状态异常诊断方法",
+        "容器网络不通 debug 步骤"
     ],
     clarification_question=None
 )
@@ -68,7 +65,7 @@ analysis_diagnosis = ProblemAnalysis(
 # 场景 2: 水平伸缩 (Scaling)
 analysis_scaling = ProblemAnalysis(
     reasoning="用户明确提到 'backend-api' 这个部署...",
-    technical_summary="用户希望将 named backend-api 的 Deployment 扩展到 10 个副本。",
+    technical_summary="用户希望将名为 backend-api 的 Deployment 扩展到 10 个副本以应对高流量。",
     target_operation=OperationType.SCALING,
     entities=[NamedEntity(name="backend-api", type="Deployment")],
     risk_level=RiskLevel.MEDIUM,
@@ -84,14 +81,15 @@ analysis_scaling = ProblemAnalysis(
 # 场景 3: 知识问答 (Knowledge QA)
 analysis_qa = ProblemAnalysis(
     reasoning="用户询问的是 Kubernetes 中 StatefulSet 和 Deployment 的核心区别...",
-    technical_summary="用户询问 Kubernetes 中 StatefulSet 与 Deployment 资源类型的核心区别。",
+    technical_summary="用户询问 Kubernetes 中 StatefulSet 与 Deployment 资源类型的核心区别，属于概念性知识问答。",
     target_operation=OperationType.KNOWLEDGE_QA,
     entities=[],
     risk_level=RiskLevel.LOW,
     search_queries=[
         "StatefulSet 与 Deployment 区别",
         "Kubernetes StatefulSet 特性说明",
-        "Deployment 和 StatefulSet 使用场景对比"
+        "Deployment 和 StatefulSet 使用场景对比",
+        "Pod 管理策略差异：Deployment vs StatefulSet"
     ],
     clarification_question=None
 )
