@@ -1,6 +1,6 @@
+from typing import Dict, Any
+
 import torch
-from typing import List, Dict, Any
-from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
