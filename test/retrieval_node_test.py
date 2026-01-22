@@ -1,23 +1,21 @@
 import os
 from typing import List, Dict, Any
+
+import torch
+from dotenv import load_dotenv, find_dotenv
+from langchain_core.runnables import RunnableConfig
+# 引入 Embedding 依赖
+from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.constants import START, END
 from langgraph.graph import StateGraph
-from langchain_core.runnables import RunnableConfig
+from pymilvus import connections
+from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
+from agent.nodes.retrieval_node import RetrievalNode
 # 引入项目模块 (请根据实际路径调整)
 from agent.state import AgentState
-from agent.schemas import ProblemAnalysis
-from agent.nodes.retrieval_node import RetrievalNode
 from retriever.MilvusHybridRetriever import MilvusHybridRetriever
 from test_dataset.retrieval_cases import ALL_RETRIEVAL_SCENARIOS, RetrievalTestScenario
-
-# 引入 Embedding 依赖
-try:
-    from langchain_huggingface import HuggingFaceEmbeddings
-    from pymilvus.model.hybrid import BGEM3EmbeddingFunction
-except ImportError:
-    print("❌ 缺少依赖包，请运行: pip install langchain-huggingface pymilvus[model]")
-    exit(1)
 
 
 # ==========================================
@@ -49,8 +47,18 @@ class DummyAnalysisNode:
 # ==========================================
 def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
     print("🚀 Starting Retrieval Node Workflow Test Batch...")
+    # 加载环境变量
+    load_dotenv(find_dotenv())
+    host = os.getenv('MILVUS_HOST', 'localhost')
+    port = os.getenv('MILVUS_PORT', '19530')
+    user = os.getenv('MILVUS_USER', 'root')
+    password = os.getenv('MILVUS_ROOT_PASSWORD', 'Milvus')
 
-    # --- A. 初始化资源 (一次性加载模型，避免重复加载) ---
+    # --- A. 连接 Milvus
+    print(f"正在连接 Milvus ({host}:{port})...")
+    connections.connect(alias="default", host=host, port=port, user=user, password=password)
+
+    # --- B. 初始化资源 (一次性加载模型，避免重复加载) ---
     print("⏳ Initializing Embeddings and Retriever (this may take a while)...")
 
     # 请根据你的实际模型路径修改
@@ -61,14 +69,14 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
     # 1. Dense Embedding
     dense_embedding = HuggingFaceEmbeddings(
         model_name=DENSE_MODEL_PATH,
-        model_kwargs={'device': 'cuda'}  # 如果没有 GPU 改为 'cpu'
+        model_kwargs={"device": "cuda" if torch.cuda.is_available() else "cpu"}
     )
 
     # 2. Sparse Embedding
     sparse_embedding = BGEM3EmbeddingFunction(
         model_name=SPARSE_MODEL_PATH,
-        use_fp16=False,
-        device="cuda"  # 如果没有 GPU 改为 'cpu'
+        use_fp16=True,
+        device="cuda" if torch.cuda.is_available() else "cpu"
     )
 
     # 3. Retriever
@@ -76,19 +84,17 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
         collection_name=COLLECTION_NAME,
         dense_embedding_func=dense_embedding,
         sparse_embedding_func=sparse_embedding,
-        top_k=3,  # 每个 Query 查 3 条
-        milvus_host="localhost",
-        milvus_port="19530"
+        top_k=5
     )
 
     # --- B. 构建图 (Build the Graph) ---
     workflow = StateGraph(AgentState)
 
-    dummy_node = DummyAnalysisNode()
+    dummy_analysis_node = DummyAnalysisNode()
     retrieval_node = RetrievalNode(retriever)
 
     # 添加节点
-    workflow.add_node("mock_analysis", dummy_node)
+    workflow.add_node("mock_analysis", dummy_analysis_node)
     workflow.add_node("retrieve_docs", retrieval_node)
 
     # 定义边
@@ -125,8 +131,9 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
 
             # 打印部分结果用于人工检查
             print(f"\n📄 Retrieved {len(retrieved_chunks)} documents.")
-            for idx, doc in enumerate(retrieved_chunks[:2]):  # 只打印前2条避免刷屏
+            for idx, doc in enumerate(retrieved_chunks[:3]):  # 只打印前3条避免刷屏
                 print(f"   [Doc {idx + 1}] Source: {doc.metadata.get('source', 'unknown')}")
+                print(f"   Title: {doc.metadata.get('title')}")
                 print(f"   Snippet: {doc.page_content[:50].replace('\n', ' ')}...")
 
             # 执行验证
@@ -147,9 +154,4 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
 
 
 if __name__ == "__main__":
-    # 确保环境变量已加载 (如果 Milvus 配置在 .env 中)
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
     retrieval_workflow_test(ALL_RETRIEVAL_SCENARIOS)

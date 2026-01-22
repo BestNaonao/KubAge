@@ -6,10 +6,10 @@ from langgraph.graph import StateGraph
 from agent.nodes.analysis_node import AnalysisNode
 from agent.state import AgentState
 from utils.llm_factory import get_chat_model
-from test_dataset.analysis_cases import ALL_SCENARIOS, TestScenario
+from test_dataset.analysis_cases import ALL_SCENARIOS, AnalysisTestScenario
 
 
-def analysis_workflow_test(scenarios: List[TestScenario]):
+def analysis_workflow_test(scenarios: List[AnalysisTestScenario]):
     print("🚀 Starting Analysis Node Workflow Test Batch...")
 
     # ==========================================
@@ -48,7 +48,7 @@ def analysis_workflow_test(scenarios: List[TestScenario]):
         try:
             # 运行工作流
             print(f"⏳ Invoking Workflow for: {case.name}...")
-            final_state = app.invoke(case.inputs)
+            final_state = app.invoke(case.user_inputs)
             analysis_result = final_state.get("analysis")
 
             if not analysis_result:
