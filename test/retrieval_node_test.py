@@ -11,6 +11,7 @@ from langgraph.graph import StateGraph
 from pymilvus import connections
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
+from agent.nodes.rerank_node import RerankNode
 from agent.nodes.retrieval_node import RetrievalNode
 # 引入项目模块 (请根据实际路径调整)
 from agent.state import AgentState
@@ -64,6 +65,7 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
     # 请根据你的实际模型路径修改
     DENSE_MODEL_PATH = "../models/Qwen/Qwen3-Embedding-0.6B"
     SPARSE_MODEL_PATH = "BAAI/bge-m3"
+    RERANKER_MODEL_PATH = "../models/Qwen/Qwen3-Reranker-0.6B"
     COLLECTION_NAME = "knowledge_base_v2"
 
     # 1. Dense Embedding
@@ -92,6 +94,10 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
 
     dummy_analysis_node = DummyAnalysisNode()
     retrieval_node = RetrievalNode(retriever)
+    rerank_node = RerankNode(
+        model_path=RERANKER_MODEL_PATH,
+        top_n=3,
+    )
 
     # 添加节点
     workflow.add_node("mock_analysis", dummy_analysis_node)
