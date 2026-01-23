@@ -54,7 +54,9 @@ class RerankNode:
             OperationType.DIAGNOSIS: (
                 "Given a troubleshooting scenario, retrieve documentation that explains error causes, "
                 "debugging steps, log interpretation, or known issues related to the query. "
-                "Prioritize actionable debugging guides over theoretical concepts."
+                "Prioritize actionable debugging guides over theoretical concepts. "
+                "General debugging methodologies are acceptable when they clearly apply to the "
+                "same failure category, even if specific resource or entity names are not mentioned."
             ),
 
             # 删除/危险操作：关注副作用、级联影响、安全操作命令、恢复方法
