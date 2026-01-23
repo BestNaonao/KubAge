@@ -5,6 +5,7 @@ from langchain_core.runnables import RunnableConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from agent.state import AgentState
+from agent.prompts import RERANK_SYSTEM_PROMPT
 
 
 class RerankNode:
@@ -25,7 +26,7 @@ class RerankNode:
         try:
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_path,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                dtype=torch.float16 if self.device == "cuda" else torch.float32,
                 attn_implementation="flash_attention_2" # 显存充足且支持时可解开注释
             ).to(self.device).eval()
         except Exception as e:
@@ -36,20 +37,18 @@ class RerankNode:
         self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
         self.token_true_id = self.tokenizer.convert_tokens_to_ids("yes")
 
-        prefix = "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n"
+        prefix = f"<|im_start|>system\n{RERANK_SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n"
         suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 
         self.prefix_tokens = self.tokenizer.encode(prefix, add_special_tokens=False)
         self.suffix_tokens = self.tokenizer.encode(suffix, add_special_tokens=False)
 
-        self.default_instruction = 'Given a web search query, retrieve relevant passages that answer the query'
+        self.default_instruction = "Evaluate the document based on the system criteria."
         print("✅ Gen-Reranker model loaded.")
 
     def _format_instruction(self, query: str, doc_content: str):
         return "<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc}".format(
-            instruction=self.default_instruction,
-            query=query,
-            doc=doc_content
+            instruction=self.default_instruction, query=query, doc=doc_content
         )
 
     def _compute_scores(self, pairs: List[str]) -> List[float]:
