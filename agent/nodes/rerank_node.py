@@ -1,11 +1,14 @@
+from typing import List, Dict, Any
+
 import torch
 import torch.nn.functional as F
-from typing import List, Dict, Any
+from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from agent.state import AgentState
 from agent.prompts import RERANK_SYSTEM_PROMPT
+from agent.schemas import OperationType
+from agent.state import AgentState
 
 
 class RerankNode:
@@ -43,13 +46,73 @@ class RerankNode:
         self.prefix_tokens = self.tokenizer.encode(prefix, add_special_tokens=False)
         self.suffix_tokens = self.tokenizer.encode(suffix, add_special_tokens=False)
 
-        self.default_instruction = "Evaluate the document based on the system criteria."
+        # 针对不同操作类型定制关注点
+        self.base_instruct = "Given a technical query about Kubernetes, retrieve relevant documentation passages that provide answers or context."
+
+        self.op_prompt_map = {
+            # 诊断场景：关注错误原因、排查步骤、命令输出解释、日志分析
+            OperationType.DIAGNOSIS: (
+                "Given a troubleshooting scenario, retrieve documentation that explains error causes, "
+                "debugging steps, log interpretation, or known issues related to the query. "
+                "Prioritize actionable debugging guides over theoretical concepts."
+            ),
+
+            # 删除/危险操作：关注副作用、级联影响、安全操作命令、恢复方法
+            OperationType.RESOURCE_DELETION: (
+                "Given a request to delete or remove resources, retrieve documentation that describes "
+                "the deletion command syntax, potential side effects, cascading deletion policies (e.g., ownerReferences), "
+                "and how to safely execute the removal."
+            ),
+
+            # 配置变更：关注 YAML 字段定义、spec 结构、配置项含义、取值范围
+            OperationType.CONFIGURE: (
+                "Given a configuration task, retrieve documentation that details the YAML resource definition, "
+                "specific field semantics (under .spec), environment variables, or annotation options required "
+                "to implement the requested configuration."
+            ),
+
+            # 扩缩容：关注 HPA、replicas 字段、资源限制(Limit/Request)、扩展命令
+            OperationType.SCALING: (
+                "Given a scaling or resource adjustment request, retrieve documentation concerning "
+                "replica settings, HorizontalPodAutoscaler (HPA) configurations, 'kubectl scale' commands, "
+                "or resource requests and limits strategies."
+            ),
+
+            # 知识问答：关注概念定义、架构原理、组件对比 (e.g. Deployment vs StatefulSet)
+            OperationType.KNOWLEDGE_QA: (
+                "Given a conceptual question, retrieve documentation that provides clear definitions, "
+                "architectural overviews, component comparisons, or design principles. "
+                "Prioritize comprehensive explanations over specific command syntax."
+            ),
+
+            # 资源查询：关注 kubectl get/describe 用法、JSONPath、字段含义
+            OperationType.RESOURCE_INQUIRY: (
+                "Given a request to query or view resource status, retrieve documentation about "
+                "'kubectl get', 'kubectl describe', output formatting, or the meaning of specific "
+                "status fields and conditions."
+            ),
+
+            # 资源创建：关注 create/apply 命令、最小可用 YAML 示例
+            OperationType.RESOURCE_CREATION: (
+                "Given a resource creation task, retrieve documentation providing 'kubectl create/apply' examples, "
+                "boilerplate YAML templates, or prerequisites for deploying the specified resource type."
+            )
+        }
+
         print("✅ Gen-Reranker model loaded.")
 
-    def _format_instruction(self, query: str, doc_content: str):
-        return "<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc}".format(
-            instruction=self.default_instruction, query=query, doc=doc_content
-        )
+    def _format_input_pair(self, instruction: str, query: str, doc: Document) -> str:
+        """
+        构造模型输入：<Instruct> + <Query> + <Document (Title + Content)>
+        """
+        # 利用文档元数据中的 Title 增强上下文
+        title = doc.metadata.get("title", "Untitled Section")
+        content = doc.page_content
+
+        # 显式拼接标题，这对 Reranker 极其重要
+        enriched_doc = f"Title: {title}\nContent: {content}"
+
+        return f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {enriched_doc}"
 
     def _compute_scores(self, pairs: List[str]) -> List[float]:
         """
@@ -66,8 +129,8 @@ class RerankNode:
 
         # 2. 手动拼接 prefix + content + suffix
         input_ids_list = inputs['input_ids']
-        for i, ele in enumerate(input_ids_list):
-            input_ids_list[i] = self.prefix_tokens + ele + self.suffix_tokens
+        for i, token_ids in enumerate(input_ids_list):
+            input_ids_list[i] = self.prefix_tokens + token_ids + self.suffix_tokens
 
         # 3. Batch Pad
         # tokenizer.pad 会自动生成 attention_mask 并处理 left padding
@@ -109,19 +172,31 @@ class RerankNode:
 
         # 确定 Query (优先使用 Analysis 阶段的技术摘要)
         analysis = state.get("analysis")
-        if analysis and analysis.technical_summary:
-            query = analysis.technical_summary
-            print(f"🎯 Query: {query[:50]}...")
+
+        if analysis:
+            # 优先使用技术摘要
+            query_text = analysis.technical_summary
+            # 获取操作类型
+            op_type = analysis.target_operation
+            print(f"🎯 Context: {op_type} | Query: {query_text[:50]}...")
         else:
-            query = state["messages"][-1].content
-            print(f"🎯 Query (Raw): {query[:50]}...")
+            query_text = state["messages"][-1].content
+            op_type = None
+            print(f"🎯 Context: Raw Input | Query: {query_text[:50]}...")
+
+        # 根据操作类型生成动态指令，提高重排针对性
+        dynamic_instruction = self.op_prompt_map.get(op_type, self.base_instruct)
+        print(f"📋 Instruction: {dynamic_instruction}")
 
         # 准备数据对
-        pairs = [self._format_instruction(query, doc.page_content) for doc in retrieved_docs]
+        input_texts = [
+            self._format_input_pair(dynamic_instruction, query_text, doc)
+            for doc in retrieved_docs
+        ]
 
         try:
             # 计算分数
-            scores = self._compute_scores(pairs)
+            scores = self._compute_scores(input_texts)
 
             # 绑定分数并排序
             doc_score_pairs = list(zip(retrieved_docs, scores))
