@@ -114,11 +114,14 @@ class RerankNode:
 
         return f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {enriched_doc}"
 
-    def _compute_scores(self, pairs: List[str]) -> List[float]:
+    def _compute_scores(self, pairs: List[str], batch_size: int = 2) -> List[float]:
         """
-        核心打分逻辑：手动拼接 tokens 并计算 yes/no 概率
+        【关键修改 2】增加 batch_size 参数，分批处理防止显存爆炸
         """
-        # 1. Tokenize query+doc pairs (不带 padding)
+        all_scores = []
+
+        # 1. 预处理所有输入
+        all_input_ids = []
         inputs = self.tokenizer(
             pairs,
             padding=False,
@@ -126,42 +129,49 @@ class RerankNode:
             return_attention_mask=False,
             max_length=self.max_length - len(self.prefix_tokens) - len(self.suffix_tokens)
         )
+        raw_input_ids = inputs['input_ids']
 
-        # 2. 手动拼接 prefix + content + suffix
-        input_ids_list = inputs['input_ids']
-        for i, token_ids in enumerate(input_ids_list):
-            input_ids_list[i] = self.prefix_tokens + token_ids + self.suffix_tokens
+        for token_ids in raw_input_ids:
+            # 手动拼接
+            full_ids = self.prefix_tokens + token_ids + self.suffix_tokens
+            all_input_ids.append(full_ids)
 
-        # 3. Batch Pad
-        # tokenizer.pad 会自动生成 attention_mask 并处理 left padding
-        batch_inputs = self.tokenizer.pad(
-            {'input_ids': input_ids_list},
-            padding=True,
-            return_tensors="pt"
-        )
+        # 2. 分批推理 (Mini-batch Inference)
+        total = len(all_input_ids)
+        for i in range(0, total, batch_size):
+            batch_ids = all_input_ids[i: i + batch_size]
 
-        # 4. Move to device
-        for key in batch_inputs:
-            batch_inputs[key] = batch_inputs[key].to(self.device)
+            # Pad 当前 batch
+            batch_inputs = self.tokenizer.pad(
+                {'input_ids': batch_ids},
+                padding=True,
+                return_tensors="pt"
+            )
 
-        # 5. Inference
-        with torch.no_grad():
-            outputs = self.model(**batch_inputs)
-            # 取最后一个 token 的 logits
-            batch_scores = outputs.logits[:, -1, :]
+            # Move to device
+            for key in batch_inputs:
+                batch_inputs[key] = batch_inputs[key].to(self.device)
 
-            # 提取 yes 和 no 的 logits
-            true_vector = batch_scores[:, self.token_true_id]
-            false_vector = batch_scores[:, self.token_false_id]
+            # Inference
+            with torch.no_grad():
+                outputs = self.model(**batch_inputs)
+                batch_logits = outputs.logits[:, -1, :]
 
-            # 堆叠并计算 softmax
-            combined_logits = torch.stack([false_vector, true_vector], dim=1)
-            probs = F.log_softmax(combined_logits, dim=1)
+                true_vec = batch_logits[:, self.token_true_id]
+                false_vec = batch_logits[:, self.token_false_id]
 
-            # 取 index 1 ("yes") 的概率作为最终得分
-            scores = probs[:, 1].exp().tolist()
+                combined = torch.stack([false_vec, true_vec], dim=1)
+                probs = F.log_softmax(combined, dim=1)
 
-        return scores
+                # 收集当前 batch 的分数
+                batch_scores = probs[:, 1].exp().tolist()
+                all_scores.extend(batch_scores)
+
+            # 清理缓存 (可选，如果显存非常紧张)
+            del batch_inputs, outputs, batch_logits
+            torch.cuda.empty_cache()
+
+        return all_scores
 
     def __call__(self, state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
         print("\n--- [Gen-Rerank Node] Running ---")
@@ -169,6 +179,8 @@ class RerankNode:
         retrieved_docs = state.get("retrieved_chunks", [])
         if len(retrieved_docs) <= 1:
             return {"retrieved_chunks": []}
+
+        print(f"Max Token Count: {max([doc.metadata['token_count'] for doc in retrieved_docs])}")
 
         # 确定 Query (优先使用 Analysis 阶段的技术摘要)
         analysis = state.get("analysis")
@@ -178,11 +190,11 @@ class RerankNode:
             query_text = analysis.technical_summary
             # 获取操作类型
             op_type = analysis.target_operation
-            print(f"🎯 Context: {op_type} | Query: {query_text[:50]}...")
+            print(f"🎯 Context: {op_type} | Query: {query_text[:100]}...")
         else:
             query_text = state["messages"][-1].content
             op_type = None
-            print(f"🎯 Context: Raw Input | Query: {query_text[:50]}...")
+            print(f"🎯 Context: Raw Input | Query: {query_text[:100]}...")
 
         # 根据操作类型生成动态指令，提高重排针对性
         dynamic_instruction = self.op_prompt_map.get(op_type, self.base_instruct)
@@ -196,7 +208,7 @@ class RerankNode:
 
         try:
             # 计算分数
-            scores = self._compute_scores(input_texts)
+            scores = self._compute_scores(input_texts, batch_size=int(len(input_texts) / 2))
 
             # 绑定分数并排序
             doc_score_pairs = list(zip(retrieved_docs, scores))
