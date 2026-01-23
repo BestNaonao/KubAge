@@ -41,6 +41,10 @@ ANALYSIS_SYSTEM_PROMPT = """
 {format_instructions}
 """
 
+RERANK_SYSTEM_PROMPT = """Determine whether the given Kubernetes documentation fragment contains authoritative and actionable information that can directly help answer or resolve the technical question described in the Query.
+Answer "yes" only if the Document provides concrete concepts, command references, configuration details, API semantics, or troubleshooting guidance that is directly useful for the Query.
+Answer "no" if the Document only provides high-level background, navigation links, unrelated topics, or information that cannot practically support solving the Query."""
+
 def get_analysis_prompt():
     return ChatPromptTemplate.from_messages([
         ("system", ANALYSIS_SYSTEM_PROMPT),
