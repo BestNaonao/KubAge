@@ -114,14 +114,15 @@ class RerankNode:
 
         return f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {enriched_doc}"
 
-    def _compute_scores(self, pairs: List[str], batch_size: int = 2) -> List[float]:
+    def _compute_scores(self, pairs: List[str], token_budget: int = 16384) -> List[float]:
         """
-        【关键修改 2】增加 batch_size 参数，分批处理防止显存爆炸
+        基于 Token Budget 的动态分批推理
+        :param pairs: 输入的文本对列表
+        :param token_budget: 显存允许的最大 token 总数 (Batch Size * Max Seq Len)
+        :return: 按照输入顺序排列的分数列表
         """
-        all_scores = []
-
-        # 1. 预处理所有输入
-        all_input_ids = []
+        # 1. 预处理：Tokenize 并手动拼接 Prefix/Suffix
+        # 为了效率，这里使用 batch_encode 这里的 truncation 只是为了防止单条超长
         inputs = self.tokenizer(
             pairs,
             padding=False,
@@ -131,30 +132,71 @@ class RerankNode:
         )
         raw_input_ids = inputs['input_ids']
 
-        for token_ids in raw_input_ids:
-            # 手动拼接
+        # 构造带索引的数据：(original_index, full_input_ids)
+        indexed_data = []
+        for idx, token_ids in enumerate(raw_input_ids):
             full_ids = self.prefix_tokens + token_ids + self.suffix_tokens
-            all_input_ids.append(full_ids)
+            indexed_data.append((idx, full_ids))
 
-        # 2. 分批推理 (Mini-batch Inference)
-        total = len(all_input_ids)
-        for i in range(0, total, batch_size):
-            batch_ids = all_input_ids[i: i + batch_size]
+        # 2. 排序：按照 token 数量降序排列
+        # 降序的好处：优先处理最长的，如果最长的单条都爆显存，能尽早发现；且通常长短文本分组更紧凑
+        indexed_data.sort(key=lambda x: len(x[1]), reverse=True)
 
-            # Pad 当前 batch
-            batch_inputs = self.tokenizer.pad(
+        # 3. 动态分批 (Greedy Batching based on Token Budget)
+        batches = []
+        current_batch = []
+        current_max_len = 0
+
+        for original_idx, ids in indexed_data:
+            seq_len = len(ids)
+
+            # 试探性计算：如果把当前样本加入 batch，新的 batch 占用多少显存？
+            # 显存占用 ∝ (当前Batch数量 + 1) * max(当前最大长度, 新样本长度)
+            # 因为是降序排列，新样本长度一定 <= current_max_len (除非是 Batch 的第一个)
+            next_max_len = max(current_max_len, seq_len)
+            next_batch_size = len(current_batch) + 1
+
+            # 计算 Token 消耗 (矩形面积)
+            estimated_token_count = next_batch_size * next_max_len
+
+            if estimated_token_count <= token_budget:
+                # 放入当前 Batch
+                current_batch.append((original_idx, ids))
+                current_max_len = next_max_len
+            else:
+                # 超出预算，封包当前 Batch，开启下一个新 Batch 初始化
+                if current_batch:
+                    batches.append(current_batch)
+
+                current_batch = [(original_idx, ids)]
+                current_max_len = seq_len
+
+        # 处理最后一个 Batch
+        if current_batch:
+            batches.append(current_batch)
+
+        # 4. 批量推理
+        results = []  # 存储 (original_index, score)
+
+        for batch in batches:
+            # batch 结构: [(idx, ids), (idx, ids), ...]
+            batch_indices = [item[0] for item in batch]
+            batch_ids = [item[1] for item in batch]
+
+            # Pad 当前 Batch (此时 batch 内长度差异很小，padding 很少)
+            padded_inputs = self.tokenizer.pad(
                 {'input_ids': batch_ids},
                 padding=True,
                 return_tensors="pt"
             )
 
             # Move to device
-            for key in batch_inputs:
-                batch_inputs[key] = batch_inputs[key].to(self.device)
+            for key in padded_inputs:
+                padded_inputs[key] = padded_inputs[key].to(self.device)
 
             # Inference
             with torch.no_grad():
-                outputs = self.model(**batch_inputs)
+                outputs = self.model(**padded_inputs)
                 batch_logits = outputs.logits[:, -1, :]
 
                 true_vec = batch_logits[:, self.token_true_id]
@@ -162,16 +204,18 @@ class RerankNode:
 
                 combined = torch.stack([false_vec, true_vec], dim=1)
                 probs = F.log_softmax(combined, dim=1)
-
-                # 收集当前 batch 的分数
                 batch_scores = probs[:, 1].exp().tolist()
-                all_scores.extend(batch_scores)
 
-            # 清理缓存 (可选，如果显存非常紧张)
-            del batch_inputs, outputs, batch_logits
-            torch.cuda.empty_cache()
+            # 收集结果
+            for idx, score in zip(batch_indices, batch_scores):
+                results.append((idx, score))
 
-        return all_scores
+        # 5. 顺序还原 (Reorder)
+        # 按照 original_index 从小到大排序，恢复原始顺序，只提取分数
+        results.sort(key=lambda x: x[0])
+        final_scores = [item[1] for item in results]
+
+        return final_scores
 
     def __call__(self, state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
         print("\n--- [Gen-Rerank Node] Running ---")
@@ -208,7 +252,7 @@ class RerankNode:
 
         try:
             # 计算分数
-            scores = self._compute_scores(input_texts, batch_size=int(len(input_texts) / 2))
+            scores = self._compute_scores(input_texts)
 
             # 绑定分数并排序
             doc_score_pairs = list(zip(retrieved_docs, scores))
