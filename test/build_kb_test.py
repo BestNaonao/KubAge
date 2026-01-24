@@ -2,9 +2,11 @@ import json
 import os
 import traceback
 from pathlib import Path
+from typing import List
 
 import torch
 from dotenv import find_dotenv, load_dotenv
+from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 from transformers import AutoTokenizer
@@ -12,7 +14,7 @@ from transformers import AutoTokenizer
 from utils import MarkdownTreeParser, encode_document_for_milvus
 
 
-def batch_by_token(documents, max_tokens_per_batch=512):  # 例如 512 或 1024
+def batch_by_token(documents, max_tokens_per_batch=1024) -> List[List[Document]]:
     """
     根据token数量对文档进行分批
     
@@ -20,7 +22,7 @@ def batch_by_token(documents, max_tokens_per_batch=512):  # 例如 512 或 1024
         documents: 文档列表
         max_tokens_per_batch: 每批的最大token数量
     Returns:
-        批次列表
+        批次列表，每批包含若干文档
     """
     batches = []
     current_batch = []
