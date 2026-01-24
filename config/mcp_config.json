@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "k8s-tools": {
+      "command": "node",
+      "args": ["/path/to/your/mcp-server-kubernetes/dist/index.js"]
+    },
+    "os-utils": {
+      "command": "python",
+      "args": ["/path/to/os_mcp/os_mcp_server.py"]
+    }
+  }
+}
