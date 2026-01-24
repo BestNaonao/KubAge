@@ -1,13 +1,13 @@
+import asyncio
 import json
 import os
 import platform
-import subprocess
+import shlex
 
 from mcp.server.fastmcp import FastMCP
 
 # 初始化 FastMCP 服务
-# dependencies 列表可以声明该服务依赖的 Python 包
-mcp = FastMCP("os-utils", dependencies=["mcp"])
+os_mcp_server = FastMCP("os-utils", dependencies=["mcp"])
 
 # 定义工作目录限制，防止 Agent 访问系统敏感目录 (如 /etc, /var 等)
 # 在实际生产中，建议将其设置为某个特定的沙箱目录
@@ -15,135 +15,221 @@ ALLOWED_ROOT = os.path.abspath("./workspace")
 if not os.path.exists(ALLOWED_ROOT):
     os.makedirs(ALLOWED_ROOT)
 
+IS_SYSTEM_WINDOWS = platform.system() == "Windows"
+
 
 def validate_path(path: str) -> str:
-    """安全检查：确保路径在允许的工作目录内"""
+    """同步辅助函数：路径检查（CPU密集型，极快，无需异步）"""
     full_path = os.path.abspath(os.path.join(ALLOWED_ROOT, path))
     if not full_path.startswith(ALLOWED_ROOT):
         raise ValueError(f"Access denied: Path must be within {ALLOWED_ROOT}")
     return full_path
 
 
-@mcp.tool()
-def execute_command(command: str, timeout: int = 30) -> str:
+@os_mcp_server.tool()
+async def execute_command(command: str, timeout: int = 60) -> str:
     """
-    Execute a shell command on the host system.
+    Execute a shell command asynchronously on the host system.
+
     WARNING: Use with caution. Only use for non-interactive commands.
+    Note: Pipes (|) and redirects (>) are NOT supported due to security restrictions (shlex usage).
+
+    Platform Specifics:
+    - Linux/macOS: Executes directly.
+    - Windows: The command is automatically wrapped in "cmd /c" to support built-ins
+      (like 'dir', 'echo'). You can also explicitly run "powershell <command>"
+      or any executable in the system PATH (e.g., "kubectl", "python").
 
     Args:
-        command: The command string to execute (e.g., "echo hello", "ls -la")
-        timeout: Execution timeout in seconds (default: 30)
+        command: The command string to execute (e.g., "ls -la" (Linux), "dir" (Windows), "python --version").
+        timeout: Execution timeout in seconds. Defaults to 60.
+
+    Returns:
+        str: A string report containing:
+             - Exit Code
+             - STDOUT (Standard Output)
+             - STDERR (Standard Error)
     """
-    # 安全拦截：禁止高危命令
     forbidden = ["rm -rf /", ":(){ :|:& };:", "mkfs", "dd if=/dev/zero"]
     if any(bad in command for bad in forbidden):
         return "Error: Command contains forbidden patterns."
 
     try:
-        # 使用 subprocess 执行，捕获输出
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            cwd=ALLOWED_ROOT,  # 限制执行目录
-            timeout=timeout
+        # 1. 使用 shlex 解析命令字符串
+        args = shlex.split(command, posix=not IS_SYSTEM_WINDOWS)
+        if not args:
+            return "Error: Empty command"
+        if IS_SYSTEM_WINDOWS:
+            args = ["cmd", "/c"] + args
+
+        # 2. 使用 asyncio 创建子进程（非阻塞）
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=ALLOWED_ROOT,
+            # env=... # 如果需要传递环境变量可以在此添加
         )
 
-        output = f"Exit Code: {result.returncode}\n"
-        if result.stdout:
-            output += f"STDOUT:\n{result.stdout}\n"
-        if result.stderr:
-            output += f"STDERR:\n{result.stderr}\n"
+        # 3. 等待结果，带超时控制
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+                # 强制等待子进程完全退出并回收资源，防止僵尸进程和管道泄漏
+                await process.wait()
+            except ProcessLookupError:
+                pass
+            return f"Error: Command timed out after {timeout} seconds"
+
+        # 4. 解码输出
+        stdout = stdout_bytes.decode('utf-8', errors='replace')
+        stderr = stderr_bytes.decode('utf-8', errors='replace')
+        return_code = process.returncode
+
+        output = f"Exit Code: {return_code}\n"
+        if stdout:
+            output += f"STDOUT:\n{stdout}\n"
+        if stderr:
+            output += f"STDERR:\n{stderr}\n"
 
         return output
-    except subprocess.TimeoutExpired:
-        return f"Error: Command timed out after {timeout} seconds"
+
+    except ValueError as e:
+        # shlex 解析错误（如引号不匹配）
+        return f"Error parsing command: {str(e)}"
+    except FileNotFoundError as e:
+        return f"Error: Executable File not found: {str(e)}."
     except Exception as e:
         return f"Error executing command: {str(e)}"
 
 
-@mcp.tool()
-def read_file(path: str) -> str:
+@os_mcp_server.tool()
+async def read_file(path: str) -> str:
     """
     Read the contents of a file from the workspace.
 
     Args:
-        path: Relative path to the file (e.g., "manifests/deploy.yaml")
+        path: Relative path to the file within the workspace (e.g., "manifests/deploy.yaml").
+
+    Returns:
+        str: The text content of the file.
+             Returns an error message starting with "Error:" if the file does not exist,
+             cannot be read, or executes outside the allowed workspace.
     """
     try:
+        # 路径验证是极快的 CPU 操作，不需要 await
         safe_path = validate_path(path)
+
         if not os.path.exists(safe_path):
             return f"Error: File not found at {path}"
 
-        with open(safe_path, 'r', encoding='utf-8') as f:
-            return f.read()
+        # 文件 I/O 是阻塞的，使用 to_thread 放入线程池运行
+        def _read():
+            with open(safe_path, 'r', encoding='utf-8') as f:
+                return f.read()
+
+        content = await asyncio.to_thread(_read)
+        return content
     except ValueError as ve:
         return str(ve)
     except Exception as e:
         return f"Error reading file: {str(e)}"
 
 
-@mcp.tool()
-def write_file(path: str, content: str) -> str:
+@os_mcp_server.tool()
+async def write_file(path: str, content: str) -> str:
     """
     Write content to a file in the workspace. Overwrites if exists.
 
     Args:
-        path: Relative path to the file
-        content: The string content to write
+        path: Relative path to the file (e.g., "configs/app-config.json").
+              Directories will be created automatically if they don't exist.
+        content: The string content to write to the file.
+
+    Returns:
+        str: A success message indicating the number of characters written,
+             or an error message if the operation fails.
     """
     try:
         safe_path = validate_path(path)
-        # 确保父目录存在
-        os.makedirs(os.path.dirname(safe_path), exist_ok=True)
 
-        with open(safe_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        return f"Successfully wrote {len(content)} characters to {path}"
+        def _write():
+            os.makedirs(os.path.dirname(safe_path), exist_ok=True)
+            with open(safe_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return len(content)
+
+        # 同样将写操作放入线程池
+        bytes_written = await asyncio.to_thread(_write)
+        return f"Successfully wrote {bytes_written} characters to {path}"
     except ValueError as ve:
         return str(ve)
     except Exception as e:
         return f"Error writing file: {str(e)}"
 
 
-@mcp.tool()
-def get_system_info() -> str:
+@os_mcp_server.tool()
+async def get_system_info() -> str:
     """
-    Get basic information about the host system (OS, Architecture, Python version).
-    Useful for determining compatibility (e.g., which docker image arch to use).
+    Get basic information about the host system.
+
+    Useful for determining compatibility (e.g., checking OS type or architecture
+    before pulling docker images).
+
+    Returns:
+        str: A JSON-formatted string containing:
+             - system: OS name (e.g., Linux, Darwin)
+             - release: OS version
+             - machine: Architecture (e.g., x86_64, arm64)
+             - workspace_root: The absolute path of the allowed workspace directory.
     """
     info = {
         "system": platform.system(),
         "release": platform.release(),
-        "version": platform.version(),
-        "machine": platform.machine(),  # e.g., x86_64, arm64
-        "processor": platform.processor(),
-        "python_version": platform.python_version(),
+        "machine": platform.machine(),
         "workspace_root": ALLOWED_ROOT
     }
     return json.dumps(info, indent=2)
 
 
-@mcp.tool()
-def append_environment_variable(key: str, value: str) -> str:
+@os_mcp_server.tool()
+async def append_environment_variable(key: str, value: str) -> str:
     """
     Append an environment variable to a '.env' file in the workspace.
-    This does NOT change the current process env, but helps persistence for future commands
-    if they load this file.
+
+    This does NOT change the current process environment immediately, but preserves
+    variables in a file that can be loaded by other tools or future sessions.
+
+    Args:
+        key: The environment variable name (e.g., "KUBE_NAMESPACE").
+        value: The value to assign.
+
+    Returns:
+        str: A success message confirming the variable was appended,
+             or an error message if the file operation fails.
     """
     try:
         env_path = validate_path(".env")
-        # 简单的追加逻辑
-        with open(env_path, "a", encoding="utf-8") as f:
-            f.write(f"\n{key}={value}")
+
+        def _append():
+            with open(env_path, "a", encoding="utf-8") as f:
+                f.write(f"\n{key}={value}")
+
+        await asyncio.to_thread(_append)
         return f"Appended {key} to .env file"
     except Exception as e:
         return f"Error saving env var: {str(e)}"
 
 
 if __name__ == "__main__":
-    # 启动 MCP 服务器
-    print(f"Starting OS Utils MCP Server...")
-    print(f"Workspace restricted to: {ALLOWED_ROOT}")
-    mcp.run()
+    import logging
+    logging.getLogger("mcp.server").setLevel(logging.WARNING)
+
+    print(f"Starting Async OS Utils MCP Server...")
+    # FastMCP.run() 内部会处理 Event Loop
+    os_mcp_server.run()
