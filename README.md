@@ -242,16 +242,37 @@ Agent使用TypedDict定义状态结构，包含以下字段：
 
 ### Agent节点 (Nodes)
 
-目前Agent包含以下节点：
+Agent包含以下几种节点类型，每个节点负责不同的处理任务：
 
 #### 1. Analysis Node（分析节点）
 - **功能**: 对用户输入进行深度分析，提取关键信息
 - **输入**: 用户消息历史和当前输入
 - **输出**: 结构化的ProblemAnalysis对象
 - **处理流程**:
-  1. 使用ChatPromptTemplate构建提示模板
-  2. 通过LLM进行意图识别和实体提取
-  3. 生成检索Query和风险评估
+  1. 使用JsonOutputParser解析ProblemAnalysis模型
+  2. 通过LLM进行意图识别、实体提取和风险评估
+  3. 生成检索Query列表
+  4. 输出包含思维链推理的结构化分析结果
+
+#### 2. Retrieval Node（检索节点）
+- **功能**: 基于分析结果中的搜索查询，从Milvus知识库中检索相关文档
+- **输入**: 分析结果中的search_queries
+- **输出**: 检索到的相关文档片段列表
+- **处理流程**:
+  1. 获取上一节点的分析结果
+  2. 遍历所有搜索查询进行检索
+  3. 对检索结果进行去重处理
+  4. 返回唯一文档片段列表
+
+#### 3. Rerank Node（重排序节点）
+- **功能**: 对检索到的文档进行重排序，提高相关性
+- **输入**: 检索到的文档片段列表
+- **输出**: 重新排序后的文档片段列表
+- **处理流程**:
+  1. 基于操作类型生成动态指令
+  2. 使用Qwen3-Reranker模型计算文档相关性分数
+  3. 根据分数重新排序文档
+  4. 返回Top-N最相关文档
 
 ### 问题分析结构 (ProblemAnalysis)
 
@@ -293,13 +314,80 @@ ProblemAnalysis是Pydantic模型，包含以下字段：
 | HIGH | 配置变更、重启 |
 | CRITICAL | 删除资源、危险操作 |
 
-### 工作流测试
+### Agent工作流模式
 
-Agent工作流通过测试用例验证其功能，包括：
-- 上下文实体提取
-- 指代消歧（如"它"指代具体资源）
-- 意图识别与风险评估
-- 检索Query生成
+Agent采用LangGraph构建有状态的工作流，支持以下模式：
+
+1. **顺序执行模式**: 按照分析→检索→重排序的顺序执行
+2. **条件分支模式**: 根据分析结果决定后续处理路径
+3. **循环重试模式**: 在检索或重排序失败时进行重试
+
+### Agent节点测试和测试用例
+
+Agent的功能通过多种测试用例进行全面验证：
+
+#### 分析节点测试 (Analysis Node Tests)
+- **上下文实体提取**: 测试从多轮对话中提取实体的能力
+- **指代消歧**: 测试识别代词指代的具体资源（如"它"指代具体资源）
+- **意图识别**: 测试准确识别用户操作意图的能力
+- **风险评估**: 测试正确评估操作风险等级的能力
+- **检索Query生成**: 测试生成有效的知识库检索Query
+
+#### 检索节点测试 (Retrieval Node Tests)
+- **多Query检索**: 测试同时使用多个查询进行检索
+- **文档去重**: 测试对重复文档进行去重处理
+- **错误处理**: 测试单个查询失败时的容错机制
+
+#### 重排序节点测试 (Rerank Node Tests)
+- **相关性评分**: 测试使用Qwen3-Reranker模型计算文档相关性
+- **动态指令**: 测试根据不同操作类型生成针对性指令
+- **批处理推理**: 测试高效处理大量文档对的能力
+
+#### 具体测试场景包括：
+- **故障诊断场景**: 如"redis-cart连接问题"的上下文分析
+- **跨命名空间分析**: 处理涉及多个命名空间的复杂问题
+- **高风险操作识别**: 如删除操作的危险性识别
+- **水平伸缩操作**: 处理Deployment扩容等伸缩需求
+- **知识问答**: 纯理论问题的处理
+- **回滚操作**: 版本回滚等重大变更操作
+- **资源创建**: 新建Namespace等资源创建操作
+- **低风险查询**: 日志查看等只读操作
+
+### Agent工作流示例
+
+```python
+from langgraph.graph import StateGraph
+from agent.nodes.analysis_node import AnalysisNode
+from agent.nodes.retrieval_node import RetrievalNode
+from agent.nodes.rerank_node import RerankNode
+from agent.state import AgentState
+from utils.llm_factory import get_chat_model
+
+# 构建工作流
+workflow = StateGraph(AgentState)
+
+# 初始化各节点
+llm = get_chat_model()
+analysis_node = AnalysisNode(llm)
+retrieval_node = RetrievalNode(retriever)
+rerank_node = RerankNode(model_path="../models/Qwen/Qwen3-Reranker-0.6B")
+
+# 添加节点
+workflow.add_node("analyze_problem", analysis_node)
+workflow.add_node("retrieve_docs", retrieval_node)
+workflow.add_node("rerank_docs", rerank_node)
+
+# 定义边
+workflow.add_edge(START, "analyze_problem")
+workflow.add_edge("analyze_problem", "retrieve_docs")
+workflow.add_edge("retrieve_docs", "rerank_docs")
+workflow.add_edge("rerank_docs", END)
+
+app = workflow.compile()
+
+# 运行工作流
+result = app.invoke({"messages": [HumanMessage(content="帮我排查nginx部署的连接问题")]})
+```
 
 ## 依赖包
 
