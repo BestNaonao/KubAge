@@ -1,10 +1,12 @@
 import asyncio
 import json
+import locale
 import os
 import platform
 import shlex
 
 from mcp.server.fastmcp import FastMCP
+from urllib3.exceptions import DecodeError
 
 # 初始化 FastMCP 服务
 os_mcp_server = FastMCP("os-utils", dependencies=["mcp"])
@@ -24,6 +26,21 @@ def validate_path(path: str) -> str:
     if not full_path.startswith(ALLOWED_ROOT):
         raise ValueError(f"Access denied: Path must be within {ALLOWED_ROOT}")
     return full_path
+
+def decode_bytes(data: bytes) -> str:
+    """尝试使用多种编码解码字节流"""
+    if not data:
+        return ""
+    # 1. 优先尝试 UTF-8 (因为很多现代 CLI 工具如 git, docker, python 默认输出 UTF-8)
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError:
+        # 2. 如果失败，尝试系统默认编码 (Windows 下通常是 cp936/GBK)
+        try:
+            return data.decode(locale.getpreferredencoding())
+        except DecodeError:
+            # 3. 如果还不行，强制使用 UTF-8 并替换错误字符 (兜底)
+            return data.decode('utf-8', errors='replace')
 
 
 @os_mcp_server.tool()
@@ -87,8 +104,8 @@ async def execute_command(command: str, timeout: int = 60) -> str:
             return f"Error: Command timed out after {timeout} seconds"
 
         # 4. 解码输出
-        stdout = stdout_bytes.decode('utf-8', errors='replace')
-        stderr = stderr_bytes.decode('utf-8', errors='replace')
+        stdout = decode_bytes(stdout_bytes)
+        stderr = decode_bytes(stderr_bytes)
         return_code = process.returncode
 
         output = f"Exit Code: {return_code}\n"

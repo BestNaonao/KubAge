@@ -85,7 +85,7 @@ async def run_tests():
             # 使用 echo 命令验证命令执行 (跨平台兼容)
             # 注意：由于我们在服务端使用了 shlex，不要使用复杂的管道符
             await invoke_tool("execute_command", {
-                "command": "powershell echo '好好好，MCP Command Execution Works'"
+                "command": "powershell echo '执行MCP命令，MCP Command Execution Works'"
             })
 
             await invoke_tool("execute_command", {
@@ -97,6 +97,11 @@ async def run_tests():
             # 额外测试：测试 execute_command 的超时或错误处理 (可选)
             await invoke_tool("execute_command", {
                 "command": "powershell sleep 2",
+                "timeout": 1
+            })
+
+            await invoke_tool("execute_command", {
+                "command": "sleep 2",
                 "timeout": 1
             })
 
