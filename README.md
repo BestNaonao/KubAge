@@ -20,6 +20,19 @@ KubAge是一个基于Kubernetes文档构建的知识库系统，支持从爬虫�
 │   └── build_knowledge_base.py # 知识库构建工作流
 ├── retriever/               # 检索器模块
 │   └── MilvusHybridRetriever.py # Milvus混合检索器
+├── agent/                   # Agent模块
+│   ├── nodes/               # Agent节点
+│   │   ├── analysis_node.py    # 问题分析节点
+│   │   ├── retrieval_node.py   # 文档检索节点
+│   │   └── rerank_node.py      # 文档重排序节点
+│   ├── graph.py             # Agent工作流图
+│   ├── state.py             # Agent状态定义
+│   ├── schemas.py           # 数据结构定义
+│   └── prompts.py           # Prompt模板
+├── config/                  # 配置模块
+│   └── mcp_config.json      # MCP服务配置
+├── os_mcp/                  # 操作系统MCP服务
+│   └── os_mcp_server.py     # MCP服务器实现
 ├── test/                    # 测试模块
 │   ├── build_kb_test.py     # 知识库构建测试
 │   └── retrieving_test.py   # 检索功能测试
@@ -57,6 +70,38 @@ KubAge是一个基于Kubernetes文档构建的知识库系统，支持从爬虫�
   - 使用密集向量（Qwen）和稀疏向量（BGE-M3）生成双重嵌入表示
   - 将文档数据存储到Milvus向量数据库
   - 支持批量处理和错误恢复
+
+### 5. Agent问题分析
+- **工具**: `agent/nodes/analysis_node.py`
+- **功能**:
+  - 理解用户的Kubernetes运维问题
+  - 提取关键实体（Pod名称、Namespace等）
+  - 识别操作类型和风险等级
+  - 生成优化的检索Query
+
+### 6. 混合检索
+- **工具**: `retriever/MilvusHybridRetriever.py` + `agent/nodes/retrieval_node.py`
+- **功能**:
+  - 基于密集向量进行语义检索
+  - 基于稀疏向量进行关键词匹配
+  - 基于标题稀疏向量进行标题匹配
+  - 使用RRF算法融合多路检索结果
+
+### 7. 文档重排序
+- **工具**: `agent/nodes/rerank_node.py`
+- **功能**:
+  - 使用Qwen3-Reranker模型对检索结果重新排序
+  - 根据操作类型生成动态排序指令
+  - 提高最终结果的相关性和准确性
+
+### 8. 命令执行（通过os_mcp）
+- **工具**: `os_mcp/os_mcp_server.py`
+- **功能**:
+  - 提供MCP（Model Context Protocol）服务接口
+  - 支持在安全沙箱环境中执行系统命令
+  - 支持文件读写操作
+  - 支持环境变量管理
+  - 为Agent提供与操作系统交互的能力
 
 ## 数据库结构
 
@@ -200,16 +245,140 @@ main()
 
 ## 配置文件
 
-项目使用`.env`文件存储配置信息：
+项目使用多个配置文件来管理不同组件的配置：
+
+### 1. 环境变量配置 (.env)
+
+位于项目根目录的`.env`文件存储数据库连接等配置信息：
 
 ```env
-MILVUS_HOST=localhost
-MILVUS_PORT=19530
-MILVUS_USER=root
-MILVUS_ROOT_PASSWORD=your_password
+# Milvus数据库配置
+MILVUS_HOST=localhost        # Milvus服务器地址
+MILVUS_PORT=19530           # Milvus服务端口
+MILVUS_USER=root            # Milvus用户名
+MILVUS_ROOT_PASSWORD=your_password  # Milvus密码
+
+# PostgreSQL数据库配置（可选）
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_password
+POSTGRES_DB=kubage_db
 ```
 
+### 2. MCP服务配置 (config/mcp_config.json)
+
+MCP（Model Context Protocol）服务的配置文件：
+
+```json
+{
+  "mcpServers": {
+    "os-utils": {
+      "command": "python",
+      "args": ["os_mcp/os_mcp_server.py"],
+      "workspace_root": "./workspace"
+    }
+  }
+}
+```
+
+配置说明：
+- **command**: MCP服务器启动命令
+- **args**: 启动参数，指向MCP服务器脚本
+- **workspace_root**: 工作空间根目录，限制文件操作范围
+
+### 3. 知识库构建配置
+
+通过`build_knowledge_base`函数参数配置：
+
+```python
+build_knowledge_base(
+    embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",  # 密集嵌入模型路径
+    sparse_model_path="BAAI/bge-m3",                              # 稀疏嵌入模型路径
+    markdown_folder_path="../raw_data",                           # 文档源路径
+    collection_name="knowledge_base_v2",                          # Milvus集合名称
+    max_tokens_per_batch=2048,                                    # 批处理token上限
+    min_chunk_size=256,                                           # 最小文档块大小
+    core_chunk_size=512,                                          # 核心文档块大小
+    max_chunk_size=2048,                                          # 最大文档块大小
+    index_type="FLAT",                                            # 向量索引类型
+    metric_type="COSINE"                                          # 相似度度量方式
+)
+```
+
+## OS MCP服务 (os_mcp)
+
+### 概述
+
+`os_mcp`是基于MCP（Model Context Protocol）协议实现的操作系统工具服务，为Agent提供与操作系统安全交互的能力。该服务运行在受限的沙箱环境中，确保命令执行的安全性。
+
+### 服务架构
+
+- **位置**: `os_mcp/os_mcp_server.py`
+- **协议**: 基于FastMCP实现的MCP服务器
+- **沙箱**: 所有文件操作限制在`./workspace`目录内
+- **异步**: 使用asyncio实现异步命令执行
+
+### 核心功能
+
+#### 1. 命令执行 (execute_command)
+```python
+execute_command(command: str, timeout: int = 60)
+```
+- 异步执行系统shell命令
+- 支持超时控制（默认60秒）
+- 自动处理stdout/stderr输出
+- 返回退出码和完整输出信息
+- **安全限制**: 不支持管道(|)和重定向(>)操作
+
+#### 2. 文件读取 (read_file)
+```python
+read_file(path: str)
+```
+- 读取工作空间内的文件内容
+- 自动检测文件编码（UTF-8、GBK、Latin-1）
+- 路径必须在允许的工作空间范围内
+
+#### 3. 文件写入 (write_file)
+```python
+write_file(path: str, content: str)
+```
+- 写入内容到工作空间文件
+- 自动创建不存在的目录
+- 覆盖已存在的文件
+
+#### 4. 系统信息获取 (get_system_info)
+```python
+get_system_info()
+```
+- 返回操作系统类型、版本、架构等信息
+- 提供工作空间绝对路径
+- 用于环境兼容性检查
+
+#### 5. 环境变量管理 (append_environment_variable)
+```python
+append_environment_variable(key: str, value: str)
+```
+- 将环境变量追加到`.env`文件
+- 持久化保存配置信息
+
+### 安全特性
+
+1. **路径验证**: 所有文件操作都经过严格的路径验证，禁止访问工作空间外的文件
+2. **命令沙箱**: 使用shlex解析命令，防止命令注入攻击
+3. **超时保护**: 所有命令执行都有超时限制，防止进程挂起
+4. **错误隔离': 单个操作失败不会影响整个服务
+
+### 使用场景
+
+- **Kubernetes运维**: 执行kubectl命令查看集群状态
+- **配置管理**: 读写YAML/JSON配置文件
+- **日志分析**: 读取和分析容器日志
+- **脚本执行**: 运行诊断和修复脚本
+
 ## 数据处理流程
+
+### 知识库构建流程
 
 1. **爬虫阶段**: 从Kubernetes官网爬取HTML文档
 2. **格式转换**: 将HTML转换为Markdown格式
@@ -219,7 +388,17 @@ MILVUS_ROOT_PASSWORD=your_password
 6. **稀疏向量化**: 使用BGE-M3模型生成稀疏向量表示
 7. **存储**: 将向量和元数据存储到Milvus
 8. **索引**: 为向量和元数据建立索引
-9. **检索**: 使用混合检索器进行查询
+
+### 智能问答流程
+
+1. **问题输入**: 用户提出Kubernetes运维相关问题
+2. **Agent分析**: 分析问题意图、提取实体、评估风险、生成检索Query
+3. **混合检索**: 使用密集向量、稀疏向量和标题向量进行三路检索
+4. **结果融合**: 使用RRF算法融合多路检索结果
+5. **文档重排**: 使用Reranker模型对结果重新排序
+6. **答案生成**: 基于检索到的知识生成回答
+7. **命令执行**: 通过os_mcp服务执行必要的kubectl命令或系统操作
+8. **结果反馈**: 将执行结果返回给用户
 
 ## Agent架构
 
