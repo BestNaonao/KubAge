@@ -1,5 +1,6 @@
-from typing import List, Optional
 from enum import Enum
+from typing import List, Optional, Dict, Any
+
 from pydantic import BaseModel, Field
 
 
@@ -52,14 +53,69 @@ class ProblemAnalysis(BaseModel):
     )
 
     risk_level: RiskLevel = Field(
-        description="非空。该操作或问题的风险等级。"
-    )
-
-    search_queries: List[str] = Field(
-        description="非空。用于在 Kubernetes 官方文档知识库中检索的通用技术 Query 列表。要求: 1. 必须去除所有用户特定的实体名称 2. 必须转换为 Kubernetes 通用术语 3. 包含排错指南、命令参考、概念解释或其他类型的查询 4. 用【中文描述 + 英文术语】的混合形式表达。"
+        description="该操作或问题的风险等级。"
     )
 
     clarification_question: Optional[str] = Field(
         default=None,
         description="如果信息缺失严重无法进行下一步，生成追问问题；否则为 None。"
     )
+
+
+class PlanAction(str, Enum):
+    RETRIEVE = "Retrieve"   # 查询知识库
+    TOOL_USE = "Tool_Use"   # 调用工具
+    DIRECT_ANSWER = "Direct_Answer"     # 直接回答/任务结束
+
+
+# --- 新增：执行计划模型 ---
+class ExecutionPlan(BaseModel):
+    """
+    Planning节点的输出结构
+    """
+    reasoning: str = Field(description="规划的理由，为什么选择这个动作")
+    action: PlanAction = Field(description="下一步的具体动作类型，或查询知识库，或调用工具，或直接回答")
+
+    # 如果 action == RETRIEVE
+    search_queries: Optional[List[str]] = Field(
+        default=None,
+        description="当 action == RETRIEVE 时必填。用于在 Kubernetes 官方文档知识库中检索的通用技术 Query 列表。要求: 1. 必须去除所有用户特定的实体名称 2. 必须转换为 Kubernetes 通用术语 3. 包含排错指南、命令参考、概念解释或其他类型的查询 4. 用【中文描述 + 英文术语】的混合形式表达"
+    )
+    # 如果 action == TOOL_USE
+    tool_name: Optional[str] = Field(
+        default=None,
+        description="当 action == TOOL_USE 时必填。调用的工具名称"
+    )
+    tool_args: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="当 action == TOOL_USE 时必填。工具调用的参数"
+    )
+    # 如果 action == DIRECT_ANSWER
+    final_answer: Optional[str] = Field(
+        default=None,
+        description="当 action 为 DIRECT_ANSWER 时必填。直接对用户问题的回答"
+    )
+
+
+class EvaluatedStatus(Enum):
+    PASS = "Pass"       # 执行成功
+    FAIL = "Fail"       # 执行失败
+    NEEDS_REFINEMENT = "Needs Refinement"   # 结果不理想，需要优化
+
+
+class NextStep(str, Enum):
+    TO_ANALYSIS = "Analysis"        # 重新分析(意图理解有误)
+    TO_PLANNING = "Planning"        # 重新规划(更换工具或检索词)
+    TO_RETRIEVAL = "Retrieval"      # 重新检索(极少直接用)
+    TO_TOOL = "ToolCall"            # 重新调用(极少直接用)
+    TO_EXPRESSION = "Expression"    # 回答用户
+
+
+class SelfEvaluation(BaseModel):
+    """
+    Self-Regulation节点的输出结构
+    """
+    status: EvaluatedStatus = Field(description="当前步骤执行结果的评估状态")
+    reasoning: str = Field(description="评估理由")
+    next_step: NextStep = Field(description="决定回退到哪一步或继续前进")
+    feedback: str = Field(description="反馈给下一步骤的改进建议或错误信息")
