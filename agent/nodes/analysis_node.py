@@ -1,8 +1,36 @@
+from typing import Dict, Any
+
 from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableConfig
 
-from agent.prompts import get_analysis_prompt, ANALYSIS_SYSTEM_PROMPT
 from agent.schemas import ProblemAnalysis
+from agent.state import AgentState
+
+
+ANALYSIS_SYSTEM_PROMPT = """
+你是一个 Kubernetes 运维专家 Agent。你的任务是基于 **对话历史** 和 **用户最新回复** 进行深度分析。
+
+# 核心原则(Core Rules)
+1. **指令优先级原则**
+ * 最新指令优先: 用户的最新意图可以推翻之前的上下文。当用户明确表达新的指令时，应该以最新的指令为准。
+2. **权限与责任原则**
+ * 用户高于AI: AI作为辅助工具，最终决策权归于用户。
+3. **风险评估原则**
+ * 风险定级标准:
+   - **Low**: 仅询问概念、查询状态、获取日志等只读操作 (ReadOnly)。
+   - **Medium**: 检查配置、执行不改变状态的调试命令。
+   - **High/Critical**: 如 修改、删除、重启、回滚 等可能影响系统状态的操作。
+
+# 思维步骤 (Chain of Thought)
+1. **上下文消歧**: 检查用户输入中是否存在代词（如“它”、“那个 pod”）。如果存在，请结合历史消息找到用户讨论的具体实体类型和名称。
+2. **意图识别**: 确定用户想要做什么（如:查询、修改、删除、排错等）。
+3. **关键信息提取**: 提取 K8s 资源名称、Namespace、错误代码等。
+4. **风险评估**: 评估该操作对生产环境的潜在影响。
+
+# 输出格式要求 (Output Format Instructions)
+{format_instructions}
+"""
 
 
 class AnalysisNode:
@@ -15,12 +43,16 @@ class AnalysisNode:
         self.parser = JsonOutputParser(pydantic_object=ProblemAnalysis)
 
         # 2. 获取 Prompt 并注入 format_instructions
-        prompt = get_analysis_prompt().partial(format_instructions=self.parser.get_format_instructions())
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", ANALYSIS_SYSTEM_PROMPT),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{current_input}")
+        ]).partial(format_instructions=self.parser.get_format_instructions())
 
         # 3. 组装 Chain
         self.chain = prompt | self.llm | self.parser
 
-    def __call__(self, state: dict, config: RunnableConfig):
+    def __call__(self, state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
         """
         节点被调用时的逻辑
         """
