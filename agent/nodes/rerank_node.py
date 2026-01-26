@@ -226,9 +226,9 @@ class RerankNode:
     def __call__(self, state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
         print("\n--- [Gen-Rerank Node] Running ---")
 
-        retrieved_docs = state.get("retrieved_chunks", [])
+        retrieved_docs = state.get("retrieved_docs", [])
         if len(retrieved_docs) <= 1:
-            return {"retrieved_chunks": []}
+            return {"retrieved_docs": []}
 
         print(f"Max Token Count: {max([doc.metadata['token_count'] for doc in retrieved_docs])}")
 
@@ -271,9 +271,9 @@ class RerankNode:
                 reranked_docs.append(doc)
                 print(f"   Score: {score:.4f} | Source: {doc.metadata.get('source', 'unknown')}")
 
-            return {"retrieved_chunks": reranked_docs}
+            return {"retrieved_docs": reranked_docs}
 
         except Exception as e:
             print(f"❌ Rerank Failed: {e}")
             # 如果重排失败，降级返回原始结果的前 N 个
-            return {"retrieved_chunks": retrieved_docs[:self.top_n]}
+            return {"retrieved_docs": retrieved_docs[:self.top_n]}
