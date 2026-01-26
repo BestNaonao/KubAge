@@ -2,7 +2,7 @@ from typing import List
 
 from langchain_core.documents import Document
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from agent.schemas import SelfEvaluation, ExecutionPlan, PlanAction, EvaluatedStatus, ProblemAnalysis
 from agent.state import AgentState
@@ -18,22 +18,24 @@ SYSTEM_EVALUATE_PROMPT = """你是一个 Kubernetes Agent 的执行监督者。
 ### 评估标准 (Evaluation Criteria)
 
 #### A. 如果动作是 RETRIEVE (文档检索)
-- **Pass (通过)**: 文档包含了解答问题所需的**具体事实**（如具体的命令参数、准确的配置 YAML、清晰的排错步骤）或概念知识（知识问答型问题）。
-  - *Feedback 要求*: 提取文档中的关键信息摘要（例如："文档提供了 CrashLoopBackOff 的三种常见原因..."），包括示例。
-- **Needs_Refinement (需改进)**: 文档相关但信息不全（例如：只查到了概念定义，没查到具体命令，但用户问的是操作步骤）。
+- **Pass (通过)**: 文档包含了解答问题所需的**具体事实**（如具体的命令参数或示例、准确的配置 YAML、清晰的排错步骤）或概念知识（针对知识问答型问题）。
+  - *Feedback 要求*: 提取文档中的关键信息摘要（例如："文档提供了 CrashLoopBackOff 的三种常见原因..."），必须包含:
+     - 命中的核心概念 / 对象
+     - 或至少一个可以直接引用的事实或步骤
+- **Needs_Refinement (需改进)**: 文档相关，但信息不全或层级不对（例如：只查到了概念定义或原理，没查到具体命令，但用户需要的是操作步骤）。
   - *Feedback 要求*: 指出缺什么（例如："缺少具体的 kubectl 修复命令"）。
 - **Fail (失败)**: 
   - 检索结果为空。
-  - 文档内容与用户问题风马牛不相及（例如：用户问 Pod，查出来的全是 Service）。
-  - *Feedback 要求*: 建议更换关键词的方向。
+  - 文档内容与用户问题无关（例如：用户问 Pod，查出来的全是 Service）。
+  - *Feedback 要求*: 建议更换关键词的方向(概念) 或 query表达。
 
 #### B. 如果动作是 TOOL_USE (工具调用)
 - **Pass**: 工具成功执行，返回了预期的观察结果（即使结果是"资源不存在"，只要符合预期也算 Pass）。
 - **Fail**: 工具报错（Error）、参数错误、或输出完全无法解析。
 
 ### 决策逻辑
-- **Pass** -> Next Step: `Expression` (可以直接回答) 或 `Planning` (继续下一步动作)
-- **Needs_Refinement** / **Fail** -> Next Step: `Planning` (需要重新规划 Query 或参数)
+- **Pass** -> Next Step: `Expression` (信息充足，可以直接回答) 或 `Planning` (继续计划下一步动作)
+- **Needs_Refinement** / **Fail** -> Next Step: `Planning` (需要重新规划 Query 或工具调用)
 
 ### 输出格式
 严格遵守 JSON 格式:
@@ -44,14 +46,18 @@ SYSTEM_EVALUATE_PROMPT = """你是一个 Kubernetes Agent 的执行监督者。
 class RegulationNode:
     """
     负责评估执行结果并给出反馈
-    TODO: 用MessagePlaceHolder代替history
     """
     def __init__(self, llm):
         self.llm = llm
         self.parser = JsonOutputParser(pydantic_object=SelfEvaluation)
         prompt = ChatPromptTemplate.from_messages([
             ("system", SYSTEM_EVALUATE_PROMPT),
-            ("user", "Analysis: {analysis}\nHistory: {history}\n\nTarget Plan: {plan}\nExecution Result: {result}")
+            MessagesPlaceholder(variable_name="history"),
+            ("user",
+             "Analysis:\n{analysis}\n\n"
+             "Target Plan:\n{plan}\n\n"
+             "Execution Result:\n{result}"
+             )
         ]).partial(
             format_instructions=self.parser.get_format_instructions(),
         )
@@ -77,6 +83,11 @@ class RegulationNode:
 
         return "\n\n".join(formatted)
 
+    @staticmethod
+    def _evaluation_view(messages):
+        # 只保留最近一轮用户问题 + 最近一次 assistant 决策
+        return messages[-4:]
+
     def __call__(self, state: AgentState):
         print("\n⚖️ [Self-Regulation]: Evaluating...")
         # 1. 解包 State 获取必要信息
@@ -98,7 +109,7 @@ class RegulationNode:
         else:
             # Direct Answer 不需要 evaluate，直接 pass
             return {"evaluation": SelfEvaluation(
-                status="Pass", reasoning="Direct Answer", next_step="Expression", feedback=plan.final_answer
+                status="Pass", reasoning="No execution required", next_step="Expression", feedback=plan.final_answer
             )}
 
         # 3. 执行评估 Chain
@@ -106,7 +117,7 @@ class RegulationNode:
             "plan": plan.model_dump(),
             "result": result_context,
             "analysis": analysis.model_dump() if analysis else "{}",
-            "history": messages,
+            "history": self._evaluation_view(messages),
         })
 
         evaluation = SelfEvaluation(**eval_result)
