@@ -22,6 +22,7 @@ class AgentState(TypedDict):
     # 3. 执行结果
     # 检索到的文档 (Retrieval Node 更新)
     retrieved_docs: Optional[List[Document]]
+    retrieval_attempts: int
     # 工具输出结果 (ToolCall Node 更新)
     tool_output: Optional[str]
 
