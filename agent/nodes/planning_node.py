@@ -1,5 +1,5 @@
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from agent.schemas import ExecutionPlan, SelfEvaluation, PlanAction, RiskLevel, ProblemAnalysis, OperationType, \
     EvaluatedStatus
@@ -70,7 +70,8 @@ class PlanningNode:
         # 注入工具描述
         prompt = ChatPromptTemplate.from_messages([
             ("system", SYSTEM_PLANNING_PROMPT),
-            ("user", "Analysis: {analysis}\nHistory: {history}")
+            MessagesPlaceholder(variable_name="history"),
+            ("user", "Analysis:\n{analysis}")
         ]).partial(
             format_instructions=self.parser.get_format_instructions(),
             tool_descriptions=self.tool_descriptions
