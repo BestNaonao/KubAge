@@ -115,7 +115,7 @@ class SelfEvaluation(BaseModel):
     """
     Self-Regulation节点的输出结构
     """
-    status: EvaluatedStatus = Field(description="当前步骤执行结果的评估状态")
     reasoning: str = Field(description="评估理由")
+    status: EvaluatedStatus = Field(description="当前步骤执行结果的评估状态")
     next_step: NextStep = Field(description="决定回退到哪一步或继续前进")
     feedback: str = Field(description="反馈给下一步骤的改进建议或错误信息")
