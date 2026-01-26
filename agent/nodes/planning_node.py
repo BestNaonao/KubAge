@@ -98,6 +98,8 @@ class PlanningNode:
             guidance.append(f"📚 已获取{len(state.get("retrieved_docs"))}篇相关文档，可优先利用现有知识")
             if plan and plan.action == PlanAction.RETRIEVE and evaluation and evaluation.status != EvaluatedStatus.PASS:
                 guidance.append(f"⚠️ 查询文档有误: {plan.action.value}，建议根据反馈改写search_queries并重新检索。")
+            if plan and plan.action == PlanAction.TOOL_USE and evaluation and evaluation.status != EvaluatedStatus.PASS:
+                guidance.append(f"⚠️ 工具调用错误: {plan.action.value}，建议根据反馈改写调用工具名或参数，并重新调用。")
 
         return "\n".join(guidance) if guidance else "✅ 无特殊约束，按常规流程规划"
 

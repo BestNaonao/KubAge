@@ -6,9 +6,13 @@ from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from agent.prompts import RERANK_SYSTEM_PROMPT
 from agent.schemas import OperationType
 from agent.state import AgentState
+
+
+RERANK_SYSTEM_PROMPT = """Determine whether the given Kubernetes documentation fragment contains authoritative and actionable information that can directly help answer or resolve the technical question described in the Query.
+Answer "yes" only if the Document provides concrete concepts, command references, configuration details, API semantics, or troubleshooting guidance that is directly useful for the Query.
+Answer "no" if the Document only provides high-level background, navigation links, unrelated topics, or information that cannot practically support solving the Query."""
 
 
 class RerankNode:
