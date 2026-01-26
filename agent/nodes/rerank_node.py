@@ -7,8 +7,6 @@ from langchain_core.runnables import RunnableConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from agent.schemas import OperationType
-from agent.state import AgentState
-
 
 RERANK_SYSTEM_PROMPT = """Determine whether the given Kubernetes documentation fragment contains authoritative and actionable information that can directly help answer or resolve the technical question described in the Query.
 Answer "yes" only if the Document provides concrete concepts, command references, configuration details, API semantics, or troubleshooting guidance that is directly useful for the Query.
@@ -16,7 +14,7 @@ Answer "no" if the Document only provides high-level background, navigation link
 
 
 class RerankNode:
-    def __init__(self, model_path: str, top_n: int = 5, max_length: int = 8192):
+    def __init__(self, model_path: str, top_n: int = 5, max_length: int = 16384):
         """
         初始化 Qwen3-Reranker (CausalLM 模式)
         """
@@ -223,7 +221,7 @@ class RerankNode:
 
         return final_scores
 
-    def __call__(self, state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
+    def __call__(self, state: dict, config: RunnableConfig) -> Dict[str, Any]:
         print("\n--- [Gen-Rerank Node] Running ---")
 
         retrieved_docs = state.get("retrieved_docs", [])
