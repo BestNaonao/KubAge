@@ -88,7 +88,7 @@ class PlanningNode:
         plan: ExecutionPlan = state.get("plan")
         evaluation = state.get("evaluation")
         has_docs = bool(state.get("retrieved_docs"))
-        retrieval_attempts = state.get("retrieval_attempts")
+        retrieval_attempts = state.get("retrieval_attempts", 0)
         guidance = []
 
         # --- 1. 检索次数熔断机制(最高优先级) ---

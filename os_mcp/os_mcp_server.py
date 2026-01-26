@@ -246,6 +246,5 @@ if __name__ == "__main__":
     import logging
     logging.getLogger("mcp.server").setLevel(logging.WARNING)
 
-    print(f"Starting Async OS Utils MCP Server...")
     # FastMCP.run() 内部会处理 Event Loop
     os_mcp_server.run()
