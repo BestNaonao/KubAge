@@ -9,6 +9,7 @@ from agent.schemas import ProblemAnalysis, OperationType, RiskLevel, NamedEntity
 class RetrievalTestScenario:
     name: str
     mock_analysis: ProblemAnalysis  # 准备好的 AnalysisNode 的结果
+    mock_plan_queries: List[str]
     verify_func: Callable[[List[Document]], None]
     description: Optional[str] = None
 
@@ -52,13 +53,6 @@ analysis_diagnosis = ProblemAnalysis(
         NamedEntity(name="default", type="Namespace")
     ],
     risk_level=RiskLevel.LOW,
-    search_queries=[
-        "Pod 网络连接问题排查",
-        "Pod 无法访问常见原因",
-        "Kubernetes Service 连接 Pod 失败",
-        "Pod 状态异常诊断方法",
-        "容器网络不通 debug 步骤"
-    ],
     clarification_question=None
 )
 
@@ -69,12 +63,6 @@ analysis_scaling = ProblemAnalysis(
     target_operation=OperationType.SCALING,
     entities=[NamedEntity(name="backend-api", type="Deployment")],
     risk_level=RiskLevel.MEDIUM,
-    search_queries=[
-        "Deployment 扩容到指定副本数",
-        "Kubernetes 水平扩展 Deployment",
-        "kubectl scale 命令使用方法",
-        "Deployment 扩容对集群资源的影响"
-    ],
     clarification_question=None
 )
 
@@ -85,12 +73,6 @@ analysis_qa = ProblemAnalysis(
     target_operation=OperationType.KNOWLEDGE_QA,
     entities=[],
     risk_level=RiskLevel.LOW,
-    search_queries=[
-        "StatefulSet 与 Deployment 区别",
-        "Kubernetes StatefulSet 特性说明",
-        "Deployment 和 StatefulSet 使用场景对比",
-        "Pod 管理策略差异：Deployment vs StatefulSet"
-    ],
     clarification_question=None
 )
 
@@ -120,18 +102,37 @@ ALL_RETRIEVAL_SCENARIOS = [
         name="01_Retrieval_Diagnosis",
         description="测试故障排查场景下的文档召回",
         mock_analysis=analysis_diagnosis,
-        verify_func=verify_diagnosis
+        verify_func=verify_diagnosis,
+        mock_plan_queries=[
+            "Pod 网络连接问题排查",
+            "Pod 无法访问常见原因",
+            "Kubernetes Service 连接 Pod 失败",
+            "Pod 状态异常诊断方法",
+            "容器网络不通 debug 步骤"
+        ],
     ),
     RetrievalTestScenario(
         name="02_Retrieval_Scaling",
         description="测试运维命令场景下的文档召回",
         mock_analysis=analysis_scaling,
-        verify_func=verify_scaling
+        verify_func=verify_scaling,
+        mock_plan_queries=[
+            "Deployment 扩容到指定副本数",
+            "Kubernetes 水平扩展 Deployment",
+            "kubectl scale 命令使用方法",
+            "Deployment 扩容对集群资源的影响"
+        ],
     ),
     RetrievalTestScenario(
         name="03_Retrieval_Knowledge",
         description="测试概念对比场景下的文档召回",
         mock_analysis=analysis_qa,
-        verify_func=verify_qa
+        verify_func=verify_qa,
+        mock_plan_queries=[
+            "StatefulSet 与 Deployment 区别",
+            "Kubernetes StatefulSet 特性说明",
+            "Deployment 和 StatefulSet 使用场景对比",
+            "Pod 管理策略差异：Deployment vs StatefulSet"
+        ],
     )
 ]

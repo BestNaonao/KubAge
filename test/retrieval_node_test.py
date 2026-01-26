@@ -13,6 +13,7 @@ from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
 from agent.nodes.rerank_node import RerankNode
 from agent.nodes.retrieval_node import RetrievalNode
+from agent.schemas import ProblemAnalysis, ExecutionPlan, PlanAction
 # 引入项目模块 (请根据实际路径调整)
 from agent.state import AgentState
 from retriever.MilvusHybridRetriever import MilvusHybridRetriever
@@ -29,18 +30,24 @@ class DummyAnalysisNode:
     并更新到 State 中。
     """
 
-    def __call__(self, state: dict, config: RunnableConfig) -> Dict[str, Any]:
+    def __call__(self, state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
         print("\n--- [Dummy Analysis Node] Injecting Mock Data ---")
         # 这里的 state 在 invoke 时会传入我们构造的初始数据
         # 我们约定在 metadata 中传入预设的 analysis 对象
         metadata = state.get("metadata", {})
-        mock_analysis = metadata.get("inject_analysis")
+        mock_analysis: ProblemAnalysis = metadata.get("inject_analysis")
+        queries = metadata.get("inject_plan_queries")
+        exePlan = ExecutionPlan(
+            reasoning="Dummy Reason",
+            action=PlanAction.RETRIEVE,
+            search_queries=queries,
+        )
 
         if not mock_analysis:
             raise ValueError("Test Error: No mock analysis data found in metadata!")
 
         print(f"✅ Injected Analysis for operation: {mock_analysis.target_operation}")
-        return {"analysis": mock_analysis}
+        return {"analysis": mock_analysis, "plan": exePlan}
 
 
 # ==========================================
@@ -93,22 +100,20 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
     workflow = StateGraph(AgentState)
 
     dummy_analysis_node = DummyAnalysisNode()
-    retrieval_node = RetrievalNode(retriever)
-    rerank_node = RerankNode(
+    reranker = RerankNode(
         model_path=RERANKER_MODEL_PATH,
         top_n=3,
     )
+    retrieval_node = RetrievalNode(retriever, reranker)
 
     # 添加节点
     workflow.add_node("mock_analysis", dummy_analysis_node)
     workflow.add_node("retrieve_docs", retrieval_node)
-    workflow.add_node("rerank_docs", rerank_node)
 
     # 定义边
     workflow.add_edge(START, "mock_analysis")
     workflow.add_edge("mock_analysis", "retrieve_docs")
-    workflow.add_edge("retrieve_docs", "rerank_docs")
-    workflow.add_edge("rerank_docs", END)
+    workflow.add_edge("retrieve_docs", END)
 
     app = workflow.compile()
 
@@ -127,7 +132,8 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
             inputs = {
                 "messages": [],  # 检索节点其实不看 messages，只看 analysis
                 "metadata": {
-                    "inject_analysis": case.mock_analysis
+                    "inject_analysis": case.mock_analysis,
+                    "inject_plan_queries": case.mock_plan_queries
                 }
             }
 

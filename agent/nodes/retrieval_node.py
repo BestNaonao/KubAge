@@ -68,7 +68,7 @@ class RetrievalNode:
         # 或者在这里直接实例化 RerankNode 并调用
         reranked_result = self.reranker(state_for_rerank, config=config)
 
-        final_docs = reranked_result.get("retrieved_chunks", [])
+        final_docs = reranked_result.get("retrieved_docs", [])
         print(f"   Found {len(final_docs)} relevant docs.")
 
         return {
