@@ -39,17 +39,17 @@ class ProblemAnalysis(BaseModel):
         description="思维链推理过程：1.结合历史消除歧义 2.分析意图 3.提取信息 4.判断风险。"
     )
 
-    technical_summary: str = Field(
-        description="用户问题的简短技术摘要，去除口语化表达，补充完整的上下文信息。"
+    entities: List[NamedEntity] = Field(
+        default_factory=list,
+        description="提取到的关键命名实体列表。"
     )
 
     target_operation: OperationType = Field(
         description="用户的目标操作类型。"
     )
 
-    entities: List[NamedEntity] = Field(
-        default_factory=list,
-        description="提取到的关键命名实体列表。"
+    technical_summary: str = Field(
+        description="用户问题的简短技术摘要，去除口语化表达，补充完整的上下文信息。"
     )
 
     risk_level: RiskLevel = Field(
