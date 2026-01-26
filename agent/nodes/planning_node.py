@@ -62,6 +62,7 @@ SYSTEM_PLANNING_PROMPT = """你是一个 Kubernetes Agent 的【规划大脑（P
 
 
 class PlanningNode:
+    MAX_RETRIEVAL_ATTEMPTS = 3
     def __init__(self, llm, tool_descriptions: str):
         self.llm = llm
         self.tool_descriptions = tool_descriptions
@@ -72,7 +73,7 @@ class PlanningNode:
             ("user", "Analysis: {analysis}\nHistory: {history}")
         ]).partial(
             format_instructions=self.parser.get_format_instructions(),
-            tool_description=self.tool_descriptions
+            tool_descriptions=self.tool_descriptions
         )
         self.chain = prompt | self.llm | self.parser
 
@@ -87,21 +88,35 @@ class PlanningNode:
         plan: ExecutionPlan = state.get("plan")
         evaluation = state.get("evaluation")
         has_docs = bool(state.get("retrieved_docs"))
+        retrieval_attempts = state.get("retrieval_attempts")
         guidance = []
-        if not has_docs:
-            guidance.append("🔍 知识状态: 尚未检索任何文档。")
-            if analysis and analysis.risk_level in self.retrieve_first_risks:
-                guidance.append(f"❗️ 风险约束: 操作风险等级={analysis.risk_level.value}，建议优先检索官方文档！")
-            if analysis and analysis.target_operation in self.retrieve_first_ops:
-                guidance.append(f"❓ 知识性操作: {analysis.target_operation.value}，建议优先检索官方文档。")
-        else:
-            guidance.append(f"📚 已获取{len(state.get("retrieved_docs"))}篇相关文档，可优先利用现有知识")
-            if plan and plan.action == PlanAction.RETRIEVE and evaluation and evaluation.status != EvaluatedStatus.PASS:
-                guidance.append(f"⚠️ 查询文档有误: {plan.action.value}，建议根据反馈改写search_queries并重新检索。")
-            if plan and plan.action == PlanAction.TOOL_USE and evaluation and evaluation.status != EvaluatedStatus.PASS:
-                guidance.append(f"⚠️ 工具调用错误: {plan.action.value}，建议根据反馈改写调用工具名或参数，并重新调用。")
 
-        return "\n".join(guidance) if guidance else "✅ 无特殊约束，按常规流程规划"
+        # --- 1. 检索次数熔断机制(最高优先级) ---
+        if retrieval_attempts >= self.MAX_RETRIEVAL_ATTEMPTS:
+            guidance.append(
+                f"  **警告——检索异常**: 已经连续检索{retrieval_attempts}次均未能通过评估。\n"
+                "   - **立即降低检索(`Retrieve`)的优先级**\n"
+                "   - 策略 A: 如果问题含糊不清，请选择 `Direct_Answer` 向用户反问或澄清。\n"
+                "   - 策略 B: 如果可以尝试通用排查命令 (如 `kubectl get events`)，请选择 `Tool_Use`。\n"
+                "   - 策略 C: 基于现有信息给出“无法找到确切文档”的保守回答。"
+            )
+            return "\n".join(guidance)  # 避免被后续规则冲淡
+
+        # --- 2. 常规指导 ---
+        if not has_docs:
+            guidance.append("  知识状态: 尚未检索任何文档。")
+            if analysis and analysis.risk_level in self.retrieve_first_risks:
+                guidance.append(f"  风险约束: 操作风险等级={analysis.risk_level.value}，建议优先检索官方文档！")
+            if analysis and analysis.target_operation in self.retrieve_first_ops:
+                guidance.append(f"  知识性操作: {analysis.target_operation.value}，建议优先检索官方文档。")
+        else:
+            guidance.append(f"  已获取{len(state.get("retrieved_docs"))}篇相关文档，可优先利用现有知识")
+            if plan and plan.action == PlanAction.RETRIEVE and evaluation and evaluation.status != EvaluatedStatus.PASS:
+                guidance.append(f"  查询文档有误: {plan.action.value}，建议根据反馈改写search_queries并重新检索。")
+            if plan and plan.action == PlanAction.TOOL_USE and evaluation and evaluation.status != EvaluatedStatus.PASS:
+                guidance.append(f"  工具调用错误: {plan.action.value}，建议根据反馈改写调用工具名或参数，并重新调用。")
+
+        return "\n".join(guidance) if guidance else "  无特殊约束，按常规流程规划"
 
     def __call__(self, state: AgentState):
         print("\n🧠 [Planning]: Thinking...")
