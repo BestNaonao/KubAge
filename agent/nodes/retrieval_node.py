@@ -25,7 +25,11 @@ class RetrievalNode:
         # 安全检查：如果没有分析结果或没有生成搜索查询，直接返回空
         if not analysis or not analysis.search_queries:
             print("❌ No search queries found in state.")
-            return {"retrieved_chunks": []}
+            return {"retrieved_docs": []}
+
+        # 获取当前次数 (默认为0)
+        current_attempts = state.get("retrieval_attempts", 0)
+        print(f"   🔄 Retrieval Attempts: {current_attempts + 1}")
 
         queries = analysis.search_queries
 
@@ -50,7 +54,11 @@ class RetrievalNode:
 
         # 4. 更新状态
         # 根据 state.py 的定义，我们返回字典，LangGraph 会将其合并到 State 中
-        return {"retrieved_chunks": unique_docs}
+        return {
+            "retrieved_docs": unique_docs,
+            "tool_output": None,
+            "retrieval_attempts": current_attempts + 1
+        }
 
     def _deduplicate_documents(self, documents: List[Document]) -> List[Document]:
         """

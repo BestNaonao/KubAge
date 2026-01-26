@@ -135,11 +135,11 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
             final_state = app.invoke(inputs)
 
             # 获取结果
-            retrieved_chunks = final_state.get("retrieved_chunks", [])
+            retrieved_docs = final_state.get("retrieved_docs", [])
 
             # 打印部分结果用于人工检查
-            print(f"\n📄 Final Retrieved {len(retrieved_chunks)} documents.")
-            for idx, doc in enumerate(retrieved_chunks):  # 只打印前3条避免刷屏
+            print(f"\n📄 Final Retrieved {len(retrieved_docs)} documents.")
+            for idx, doc in enumerate(retrieved_docs):  # 只打印前3条避免刷屏
                 score = doc.metadata.get('rerank_score', 'N/A')
                 print(f"   [Doc {idx + 1}] Source: {doc.metadata.get('source', 'unknown')}")
                 print(f"   Title: {doc.metadata.get('title')}")
@@ -148,7 +148,7 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
 
             # 执行验证
             print("🔍 Verifying results...")
-            case.verify_func(retrieved_chunks)
+            case.verify_func(retrieved_docs)
 
             print(f"✅ Passed!")
             success_count += 1
