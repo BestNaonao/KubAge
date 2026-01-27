@@ -1,5 +1,6 @@
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from typing import List
 
+from langchain_core.documents import Document
 
 RETRIEVAL_PROMPT = """
 5. **检索策略生成**: 将用户的自然语言转化为专业的 K8s 术语，以生成高质量的检索 Query。
@@ -21,3 +22,27 @@ RETRIEVAL_PROMPT = """
   ✅ 正确 (混合): ["Service 连接 Pod 超时", "Service debug 步骤", "Pod 网络不通排查"]
 """
 
+DOC_PROMPT_TEMPLATE = """[Document {index}] 
+Title: {title}
+Content: 
+{content}..."""
+
+def format_docs(docs: List[Document]) -> str:
+    """
+    将文档列表格式化为字符串，供 LLM 审查。
+    限制总字符数防止 Context 溢出。
+    """
+    if not docs:
+        return "No documents retrieved."
+
+    formatted = []
+    current_chars = 0
+    for i, doc in enumerate(docs):
+        doc_content = doc.page_content.strip()
+        doc_title = doc.metadata.get('title', 'Unknown')
+        entry = DOC_PROMPT_TEMPLATE.format(index=i + 1, title=doc_title, content=doc_content)
+        # 内容暂时未做出截断
+        formatted.append(entry)
+        current_chars += len(entry)
+
+    return "\n\n".join(formatted)

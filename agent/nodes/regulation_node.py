@@ -1,9 +1,7 @@
-from typing import List
-
-from langchain_core.documents import Document
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+from agent.prompts import format_docs
 from agent.schemas import SelfEvaluation, ExecutionPlan, PlanAction, EvaluatedStatus, ProblemAnalysis, OperationType, \
     NextStep
 from agent.state import AgentState
@@ -79,26 +77,6 @@ class RegulationNode:
         self.chain = prompt | self.llm | self.parser
 
     @staticmethod
-    def _format_docs(docs: List[Document]) -> str:
-        """
-        将文档列表格式化为字符串，供 LLM 审查。
-        限制总字符数防止 Context 溢出。
-        """
-        if not docs:
-            return "No documents retrieved."
-
-        formatted = []
-        current_chars = 0
-        for i, doc in enumerate(docs):
-            content = doc.page_content.replace("\n", " ")  # 单篇文档也做截断
-            entry = f"[Doc {i + 1}] Title: {doc.metadata.get('title', 'Unknown')}\nContent: {content}..."
-            # 内容暂时未做出截断
-            formatted.append(entry)
-            current_chars += len(entry)
-
-        return "\n\n".join(formatted)
-
-    @staticmethod
     def _generate_dynamic_criteria(action: PlanAction) -> str:
         if action == PlanAction.RETRIEVE:
             return RETRIEVE_CRITERIA
@@ -132,7 +110,7 @@ class RegulationNode:
         # 2. 获取最近的执行产出，准备 Result 上下文
         if plan.action == PlanAction.RETRIEVE:
             docs = state.get("retrieved_docs", [])
-            result_context = self._format_docs(docs)
+            result_context = format_docs(docs)
             print(f"   Auditing {len(docs)} documents content...")
         elif plan.action == PlanAction.TOOL_USE:
             tool_output = state.get("tool_output", "")
