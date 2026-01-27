@@ -225,7 +225,7 @@ class RerankNode:
         print("\n--- [Gen-Rerank Node] Running ---")
 
         retrieved_docs = state.get("retrieved_docs", [])
-        if len(retrieved_docs) <= 1:
+        if len(retrieved_docs) <= 0:
             return {"retrieved_docs": []}
 
         print(f"Max Token Count: {max([doc.metadata['token_count'] for doc in retrieved_docs])}")

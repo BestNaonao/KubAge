@@ -88,7 +88,7 @@ class RetrievalNode:
 
         for doc in documents:
             # 优先使用数据库主键 pk
-            doc_id = doc.metadata.get("pk")
+            doc_id = doc.metadata.get("pk", "")
 
             # 如果 retrieve 的时候没有拉取 pk，则使用内容的哈希兜底
             if not doc_id:
