@@ -1,3 +1,4 @@
+import json
 from enum import Enum
 from typing import List, Optional, Dict, Any
 
@@ -120,3 +121,39 @@ class SelfEvaluation(BaseModel):
     status: EvaluatedStatus = Field(description="当前步骤执行结果的评估状态")
     next_step: NextStep = Field(description="决定回退到哪一步或继续前进")
     feedback: str = Field(description="反馈给下一步骤的改进建议或错误信息")
+
+def analysis_view(analysis: ProblemAnalysis) -> str:
+    """问题分析的视图"""
+    if not analysis:
+        return "None"
+    entities = [{"name": e.name, "type": e.type} for e in analysis.entities]
+    return (
+        f"   - 技术摘要: {analysis.technical_summary}\n"
+        f"   - 操作类型: {analysis.target_operation.value}\n"
+        f"   - 风险等级: {analysis.risk_level.value}\n"
+        f"   - 关键实体: {json.dumps(entities, ensure_ascii=False)}"
+    )
+
+def plan_view(plan: ExecutionPlan) -> str:
+    """执行计划的视图"""
+    if not plan:
+        return "None"
+    entries = [f"   - 动作类型: {plan.action.value}"]
+    if plan.action == PlanAction.RETRIEVE:
+        for i, query in enumerate(plan.search_queries):
+            entries.append(f"   - Query {i + 1}: {query}")
+    if plan.action == PlanAction.TOOL_USE:
+        entries.append(f"   - 调用工具: {plan.tool_name}")
+        entries.append(f"   - 工具参数: {plan.tool_args}")
+    if plan.action == PlanAction.DIRECT_ANSWER:
+        entries.append(f"   - 最后回答: {plan.final_answer}")
+    return "\n".join(entries)
+
+def evaluation_view(evaluation: SelfEvaluation) -> str:
+    """自我评估的视图"""
+    if not evaluation:
+        return "None"
+    return (
+        f"   - 评估状态: {evaluation.status.value}\n"
+        f"   - 反馈信息: {evaluation.feedback}"
+    )
