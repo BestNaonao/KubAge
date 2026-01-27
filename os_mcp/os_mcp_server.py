@@ -3,7 +3,6 @@ import json
 import locale
 import os
 import platform
-import shlex
 
 from mcp.server.fastmcp import FastMCP
 
@@ -72,15 +71,15 @@ async def execute_command(command: str, timeout: int = 60) -> str:
 
     try:
         # 1. 使用 shlex 解析命令字符串
-        args = shlex.split(command, posix=not IS_SYSTEM_WINDOWS)
-        if not args:
-            return "Error: Empty command"
-        if IS_SYSTEM_WINDOWS:
-            args = ["cmd", "/c"] + args
+        # args = shlex.split(command, posix=not IS_SYSTEM_WINDOWS)
+        # if not args:
+        #     return "Error: Empty command"
+        # if IS_SYSTEM_WINDOWS:
+        #     args = ["cmd", "/c"] + args
 
         # 2. 使用 asyncio 创建子进程（非阻塞）
-        process = await asyncio.create_subprocess_exec(
-            *args,
+        process = await asyncio.create_subprocess_shell(
+            command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=ALLOWED_ROOT,

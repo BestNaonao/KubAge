@@ -85,7 +85,7 @@ async def run_tests():
             # 使用 echo 命令验证命令执行 (跨平台兼容)
             # 注意：由于我们在服务端使用了 shlex，不要使用复杂的管道符
             await invoke_tool("execute_command", {
-                "command": "powershell echo '执行MCP命令，MCP Command Execution Works'"
+                "command": "echo '执行MCP命令，MCP Command Execution Works'"
             })
 
             await invoke_tool("execute_command", {
