@@ -1,11 +1,12 @@
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+from agent.prompts import format_docs
 from agent.schemas import ExecutionPlan, SelfEvaluation, PlanAction, RiskLevel, ProblemAnalysis, OperationType, \
-    EvaluatedStatus
+    EvaluatedStatus, analysis_view, evaluation_view
 from agent.state import AgentState
 
-SYSTEM_PLANNING_PROMPT = """你是一个 Kubernetes Agent 的【规划大脑（Planning Node）】。
+SYSTEM_PLANNING_PROMPT = """你是 Kubernetes 智能运维系统中的【规划模块】。
 你的职责是：基于【问题分析 Analysis】、【历史对话 History】以及【上一步评估反馈 Feedback】，制定下一步最合理、安全、有效的行动计划。
 
 ### 一、 核心规划原则 (Core Planning Principles)
@@ -29,10 +30,7 @@ SYSTEM_PLANNING_PROMPT = """你是一个 Kubernetes Agent 的【规划大脑（P
    - 只有在信息充足、风险已知的情况下，选择 `Tool_Use` 执行操作。
    - 只有在任务已完成或无需操作即可回答时，选择 `Direct_Answer`。
 
-### 二、 动态指导 (Contextual Guidance)
-{dynamic_guidance}
-
-### 三、 行动生成约束 (Generation Constraints)
+### 二、 行动生成约束 (Generation Constraints)
 
 #### 1. 当 Action = "Retrieve" (检索策略)
 将用户的自然语言转化为专业的 K8s 术语，生成 `search_queries`：
@@ -52,17 +50,26 @@ SYSTEM_PLANNING_PROMPT = """你是一个 Kubernetes Agent 的【规划大脑（P
 - 仅当任务已完成或无需外部信息即可给出最终结论时使用。
 - `final_response` 必须包含完整的最终结论，总结之前的检索和操作结果。
 
-### 四、 可用工具列表 (Tools Library)
+### 三、 可用工具列表 (Tools Library)
 {tool_descriptions}
 
-### 五、 输入上下文
-- **操作类型**: {op_type}
-- **风险等级**: {risk_level}
-- **上一步反馈**: {feedback}
-
-### 六、输出格式
+### 四、输出格式
 严格按照以下 JSON 格式输出:
 {format_instructions}
+"""
+
+USER_PLANNING_PROMPT = """
+### 分析结果:
+{analysis}
+
+### 动态指导:
+{dynamic_guidance}
+
+### 检索结果:
+{documents}
+
+### 步骤反馈:
+{feedback}
 """
 
 
@@ -76,10 +83,10 @@ class PlanningNode:
         prompt = ChatPromptTemplate.from_messages([
             ("system", SYSTEM_PLANNING_PROMPT),
             MessagesPlaceholder(variable_name="history"),
-            ("user", "Analysis:\n{analysis}")
+            ("user", USER_PLANNING_PROMPT)
         ]).partial(
-            format_instructions=self.parser.get_format_instructions(),
-            tool_descriptions=self.tool_descriptions
+            tool_descriptions=self.tool_descriptions,
+            format_instructions=self.parser.get_format_instructions()
         )
         self.chain = prompt | self.llm | self.parser
 
@@ -128,10 +135,8 @@ class PlanningNode:
         print("\n🧠 [Planning]: Thinking...")
         messages = state.get("messages")
         analysis = state.get("analysis")
-
-        # 获取上一步的评估反馈，如果有的话
+        documents = state.get("retrieved_docs")
         evaluation: SelfEvaluation = state.get("evaluation")
-        feedback = evaluation.feedback if evaluation else "None"
 
         dynamic_guidance = self._generate_dynamic_guidance(state)
 
@@ -141,12 +146,11 @@ class PlanningNode:
         # 调用链
         try:
             result = self.chain.invoke({
-                "analysis": analysis.model_dump(),
                 "history": messages,
+                "analysis": analysis_view(analysis),
                 "dynamic_guidance": dynamic_guidance,
-                "op_type": analysis.target_operation.value,
-                "risk_level": analysis.risk_level.value,
-                "feedback": feedback
+                "documents": format_docs(documents),
+                "feedback": evaluation_view(evaluation),
             })
 
             plan = ExecutionPlan(**result)
