@@ -142,6 +142,7 @@ class PlanningNode:
             })
 
             plan = ExecutionPlan(**result)
+            print(f"   Reasoning: {plan.reasoning}")
             print(f"   Action: {plan.action.value}")
             if plan.action == PlanAction.TOOL_USE:
                 print(f"   Target Tool: {plan.tool_name}")

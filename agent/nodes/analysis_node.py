@@ -65,6 +65,8 @@ class AnalysisNode:
         if not messages:
             return {"analysis": None}
 
+        print("\n📊 [Analysis]: Understanding...")
+
         current_input = messages[-1].content
         history = messages[:-1]
 
@@ -83,6 +85,12 @@ class AnalysisNode:
             # 4. 手动转为 Pydantic 对象 (进行二次校验)
             # 这一步是为了确保类型安全，如果模型漏字段，这里会报错
             analysis_result = ProblemAnalysis(**analysis_dict)
+
+            print(f"   Reasoning: {analysis_result.reasoning}")
+            print(f"   Entities: {analysis_result.entities}")
+            print(f"   Target Operation: {analysis_result.target_operation}")
+            print(f"   Technical Summary: {analysis_result.technical_summary}")
+            print(f"   Risk Level: {analysis_result.risk_level}")
 
             return {"analysis": analysis_result}
 

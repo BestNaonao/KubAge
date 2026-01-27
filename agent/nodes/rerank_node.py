@@ -267,7 +267,7 @@ class RerankNode:
             for doc, score in doc_score_pairs[:self.top_n]:
                 doc.metadata["rerank_score"] = float(score)
                 reranked_docs.append(doc)
-                print(f"   Score: {score:.4f} | Source: {doc.metadata.get('source', 'unknown')}")
+                print(f"   Score: {score:.4f} | Title: {doc.metadata.get('title', 'unknown')}")
 
             return {"retrieved_docs": reranked_docs}
 

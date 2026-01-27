@@ -130,4 +130,6 @@ class RegulationNode:
 
         print(f"   Decision: {evaluation.status} -> Next: {evaluation.next_step}")
         print(f"   Reason: {evaluation.reasoning}")
+        print(f"   Feedback: {evaluation.feedback}")
+
         return updates
