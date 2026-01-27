@@ -23,6 +23,7 @@ class OperationType(str, Enum):
     SCALING = "Scaling"     # 性能调优——水平伸缩
     RESTART = "Restart"     # 重启运行时
     ROLLOUT = "Rollout"     # 回滚
+    INSTALL = "Install"     # 安装
     PROXY = "Proxy"     # 代理
     OTHER = "Other"
 
