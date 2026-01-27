@@ -3,10 +3,10 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from agent.prompts import format_docs
 from agent.schemas import SelfEvaluation, ExecutionPlan, PlanAction, EvaluatedStatus, ProblemAnalysis, OperationType, \
-    NextStep
+    NextStep, analysis_view, plan_view
 from agent.state import AgentState
 
-SYSTEM_EVALUATE_PROMPT = """你是一个 Kubernetes Agent 的执行监督者。
+SYSTEM_EVALUATE_PROMPT = """你是 Kubernetes 智能运维系统中的【执行监督者】。
 你的核心职责是：评估最近的执行结果（检索文档或工具输出）是否可以有效地解决用户的问题，并决定下一步流向。
 
 ### 输入信息
@@ -55,6 +55,17 @@ RETRIEVE_TO_EXPRESS_LOGIC = "     - 场景 A (纯问答): 评估状态为 Pass�
 
 TOOL_USE_TO_EXPRESS_LOGIC = "     - 场景 B (任务完成): 所有的工具调用都已成功执行完毕，最后一次工具调用的结果可以证明已满足用户的需求。\n"
 
+USER_REGULATION_PROMPT = """
+### 分析结果:
+{analysis}
+
+### 目标计划:
+{plan}
+
+### 执行结果:
+{result}
+"""
+
 
 class RegulationNode:
     """
@@ -66,11 +77,7 @@ class RegulationNode:
         prompt = ChatPromptTemplate.from_messages([
             ("system", SYSTEM_EVALUATE_PROMPT),
             MessagesPlaceholder(variable_name="history"),
-            ("user",
-             "Analysis:\n{analysis}\n\n"
-             "Target Plan:\n{plan}\n\n"
-             "Execution Result:\n{result}"
-             )
+            ("user", USER_REGULATION_PROMPT)
         ]).partial(
             format_instructions=self.parser.get_format_instructions(),
         )
@@ -129,8 +136,8 @@ class RegulationNode:
             "to_planning_logic": to_planning_logic,
             "to_expression_logic": to_expression_logic,
             "history": self._evaluation_view(messages),
-            "analysis": analysis.model_dump() if analysis else "{}",
-            "plan": plan.model_dump(),
+            "analysis": analysis_view(analysis),
+            "plan": plan_view(plan),
             "result": result_context,
         })
 
