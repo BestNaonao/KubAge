@@ -30,7 +30,7 @@ Content:
 def format_docs(docs: List[Document]) -> str:
     """
     将文档列表格式化为字符串，供 LLM 审查。
-    限制总字符数防止 Context 溢出。
+    To Do: 限制总字符数防止 Context 溢出。
     """
     if not docs:
         return "No documents retrieved."
