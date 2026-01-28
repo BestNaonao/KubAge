@@ -3,52 +3,51 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from agent.prompts import format_docs
 from agent.schemas import ExecutionPlan, SelfEvaluation, PlanAction, RiskLevel, ProblemAnalysis, OperationType, \
-    EvaluatedStatus, analysis_view, evaluation_view
+    EvaluatedStatus, analysis_view, evaluation_view, plan_view
 from agent.state import AgentState
 
 SYSTEM_PLANNING_PROMPT = """你是 Kubernetes 智能运维系统中的【规划模块】。
-你的职责是：基于【问题分析 Analysis】、【历史对话 History】以及【上一步评估反馈 Feedback】，制定下一步最合理、安全、有效的行动计划。
+你的职责是：基于【历史对话】和用户的【问题分析】、【动态指导】、【文档知识】、【上轮计划】、【步骤反馈】，制定下一步最合理、安全、有效的行动计划。
 
 ### 一、 核心规划原则 (Core Planning Principles)
 **请严格遵守以下原则：**
 
-1. **反冗余原则 (Anti-Redundancy)**:
-   - 禁止重复执行相同的 search_queries。
-   - **绝对禁止**重复调用获取静态信息的工具 (如 `get_system_info`)，除非上一次调用失败。
-   - **检查历史**: 在规划动作前，必须检查 历史消息，其中可能包含可以利用的信息。
-
-2. **反馈驱动修正 (Feedback-Driven Correction)**:
+1. **反馈驱动修正 (Feedback-Driven Correction)**:
    - 如果 `Feedback` 表明存在 Fail / Needs_Refinement，必须分析失败原因。
-   - 检索无结果或相关性低 -> 尝试优化 `search_queries` 或换一个方向检索。
+   - 检索无结果或相关性低 -> 尝试优化 `search_queries` 或换一个方向检索，禁止重复执行相同的 `search_queries`。
    - 工具报错或参数错误 -> 检查 `tool_args` 是否符合 Schema，或检索文档寻找正确用法。
 
-3. **知识检索优先原则 (Knowledge First)**:
+2. **知识检索优先原则 (Knowledge First)**:
    - 在未检索文档，并且你不确定具体命令参数、或 YAML 结构、或最佳实践时，**必须优先选择 `Retrieve`**。
    - **例外**: 只有当历史记录显示**已经进行过充分的检索**且获得了必要信息，才允许跳过检索直接使用工具。
 
-4. **行动与回答 (Action & Answer)**:
+3. **行动与回答 (Action & Answer)**:
    - 只有在信息充足、风险已知的情况下，选择 `Tool_Use` 执行操作。
    - 只有在任务已完成或无需操作即可回答时，选择 `Direct_Answer`。
 
 ### 二、 行动生成约束 (Generation Constraints)
+首先决定下一步Action是：
+   - 检索更多文档（Retrieve）
+   - 调用工具（Tool_Use）
+   - 直接回答或追问用户（Direct_Answer）
 
-#### 1. 当 Action = "Retrieve" (检索策略)
+#### 1. Action = "Retrieve"
 将用户的自然语言转化为专业的 K8s 术语，生成 `search_queries`：
-- 你将要检索的知识库是《Kubernetes 官方中文文档》。
-- **通用化**: 文档中没有用户的具体实体名称。**必须**将具体问题抽象为通用的 Kubernetes 概念或错误类型。**禁止**包含具体实体名（如 pod 名、IP 地址）。
-- **语言要求**: 使用 **中文** 描述逻辑，保留 **英文** 专有名词。
-- **混合模式**: 最佳结构是 “英文术语 + 中文描述”。
-- **示例**:
-  - ❌ 错误: ["redis-cart-7d8f 启动失败", "CrashLoopBackOff 怎么修"]
-  - ✅ 正确: ["CrashLoopBackOff 排查思路", "Pod 状态 ImagePullBackOff 原因", "Deployment 滚动更新策略"]
+   - 你将要检索的知识库是《Kubernetes 官方中文文档》。
+   - **通用化**: 文档中没有用户的具体实体名称。**必须**将具体问题抽象为通用的 Kubernetes 概念或错误类型。**禁止**包含具体实体名（如 pod 名、IP 地址）。
+   - **语言要求**: 使用 **中文** 描述逻辑，保留 **英文** 专有名词。
+   - **混合模式**: 最佳结构是 “英文术语 + 中文描述”。
+   - **示例**:
+     - ❌ 错误: ["redis-cart-7d8f 启动失败", "CrashLoopBackOff 怎么修"]
+     - ✅ 正确: ["CrashLoopBackOff 排查思路", "Pod 状态 ImagePullBackOff 原因", "Deployment 滚动更新策略"]
 
-#### 2. 当 Action = "Tool_Use" (工具调用)
-- `tool_name` 和 `tool_args` 必须严格匹配【可用工具列表】中的定义的 Schema。
-- 不允许通过猜测生成参数。如果不了解参数，请先 Retrieve。
+#### 2. Action = "Tool_Use"
+   - `tool_name` 和 `tool_args` 必须严格匹配【可用工具列表】中的定义的 Schema。
+   - 不允许通过猜测生成参数。如果不了解参数，请先 Retrieve。
 
-#### 3. 当 Action = "Direct_Answer" (直接回答)
-- 仅当任务已完成或无需外部信息即可给出最终结论时使用。
-- `final_response` 必须包含完整的最终结论，总结之前的检索和操作结果。
+#### 3. Action = "Direct_Answer"
+   - 仅当任务已完成或无需外部信息即可给出最终结论时使用。
+   - `final_response` 必须包含完整的最终结论，总结之前的检索和操作结果。
 
 ### 三、 可用工具列表 (Tools Library)
 {tool_descriptions}
@@ -59,14 +58,17 @@ SYSTEM_PLANNING_PROMPT = """你是 Kubernetes 智能运维系统中的【规划�
 """
 
 USER_PLANNING_PROMPT = """
-### 分析结果:
+### 问题分析:
 {analysis}
 
 ### 动态指导:
 {dynamic_guidance}
 
-### 检索结果:
+### 文档知识:
 {documents}
+
+### 上轮计划:
+{former_plan}
 
 ### 步骤反馈:
 {feedback}
@@ -136,6 +138,7 @@ class PlanningNode:
         messages = state.get("messages")
         analysis = state.get("analysis")
         documents = state.get("retrieved_docs")
+        plan = state.get("plan")
         evaluation: SelfEvaluation = state.get("evaluation")
 
         dynamic_guidance = self._generate_dynamic_guidance(state)
@@ -150,6 +153,7 @@ class PlanningNode:
                 "analysis": analysis_view(analysis),
                 "dynamic_guidance": dynamic_guidance,
                 "documents": format_docs(documents),
+                "former_plan": plan_view(plan),
                 "feedback": evaluation_view(evaluation),
             })
 
