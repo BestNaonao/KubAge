@@ -1,7 +1,6 @@
-# agent/nodes/expression_node.py
 from langchain_core.messages import AIMessage
 
-from agent.schemas import ExecutionPlan, SelfEvaluation
+from agent.schemas import ExecutionPlan, SelfEvaluation, NextStep
 from agent.state import AgentState
 
 
@@ -14,7 +13,7 @@ class ExpressionNode:
         # 如果是 Direct Answer，直接使用
         if plan and plan.final_answer:
             response = plan.final_answer
-        elif evaluation and evaluation.next_step == "Expression":
+        elif evaluation and evaluation.next_step == NextStep.TO_EXPRESSION:
             response = evaluation.feedback
         else:
             # 也可以在这里再次调用 LLM 综合 Docs 和 Tool Output 生成回答
