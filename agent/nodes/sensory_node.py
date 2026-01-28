@@ -3,7 +3,7 @@ import os
 import platform
 from typing import Dict, Any
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from agent.state import AgentState
@@ -11,8 +11,9 @@ from agent.state import AgentState
 
 class SensoryNode:
     def __init__(self, config_path: str):
+        self.system_info_label = "【用户环境上下文】"
         self.system_info_str = self._get_static_system_info(config_path)
-        self.system_info_label = "【Environment Context】"
+
 
     def _get_static_system_info(self, config_path) -> str:
         """
@@ -33,10 +34,10 @@ class SensoryNode:
         # 构造环境上下文 Prompt
         info = (
             f"{self.system_info_label}\n"
-            f"- OS: {os_type} {os_release}\n"
-            f"- Architecture: {os_arch}\n"
+            f"- 操作系统: {os_type} {os_release}\n"
+            f"- 硬件架构: {os_arch}\n"
             f"- Workspace Root: {workspace_path}\n"
-            f"- Current Working Directory: {os.getcwd()}\n"
+            f"- 当前工作目录: {os.getcwd()}\n"
             f"注意：所有文件操作和命令执行默认基于 Workspace Root 或当前目录。"
         )
         return info
@@ -51,7 +52,7 @@ class SensoryNode:
         # 1. 检查是否已经注入过环境信息
         # 我们约定：环境信息作为 SystemMessage 存在，且包含特定的标记
         has_env_context = any(
-            isinstance(m, ToolMessage) and self.system_info_label in m.content
+            isinstance(m, SystemMessage) and self.system_info_label in m.content
             for m in messages
         )
 
@@ -60,7 +61,7 @@ class SensoryNode:
         # 2. 如果没有注入过，则插入到最前面 (或者追加到 System Prompt 之后)
         if not has_env_context:
             print("   ✨ Injecting System Environment Context to Memory...")
-            env_message = ToolMessage(content=self.system_info_str)
+            env_message = SystemMessage(content=self.system_info_str)
 
             # 策略 A: 插入到消息列表的开头 (推荐，作为长期记忆的基础)
             # 注意：LangGraph 的 state["messages"] 通常是 append-only 的，
@@ -80,6 +81,6 @@ class SensoryNode:
 
             # 修正策略：直接返回包含环境信息的 SystemMessage。
             # 大模型通常能处理乱序的 SystemMessage，只要它在 Context window 里。
-            updates["messages"] = [env_message]
+            state.get("messages").insert(0, env_message)
 
         return updates
