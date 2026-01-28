@@ -10,6 +10,9 @@ class ExpressionNode:
         plan: ExecutionPlan = state.get("plan")
         evaluation: SelfEvaluation = state.get("evaluation")
 
+        for m in state.get("messages"):
+            m.pretty_print()
+
         # 如果是 Direct Answer，直接使用
         if plan and plan.final_answer:
             response = plan.final_answer

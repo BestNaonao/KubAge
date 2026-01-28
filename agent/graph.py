@@ -21,14 +21,14 @@ Self_Regulation = "Self-Regulation"
 Expression =  "Expression"
 
 
-def build_react_agent(llm, retriever, reranker, tool_descriptions: str):
+def build_react_agent(llm, retriever, reranker, tool_descriptions: str, config_path="config/mcp_config.json"):
     """
     构建图，传入 tool_descriptions 供 Planning 节点使用
     """
     workflow = StateGraph(AgentState)
 
     # 1. 初始化节点
-    sensory_node = SensoryNode()
+    sensory_node = SensoryNode(config_path=config_path)
     analysis_node = AnalysisNode(llm)
     # 注入工具描述
     planning_node = PlanningNode(llm, tool_descriptions)

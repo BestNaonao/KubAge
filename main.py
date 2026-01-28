@@ -65,8 +65,14 @@ async def main():
     # 确保 config/mcp_config.json 存在且路径正确
     await mcp_manager.initialize(config_path="config/mcp_config.json")
 
+    count = 0
     for tool_name, tool in mcp_manager.tools_map.items():
         print(f" -Tool: {tool_name}")
+        count += 1
+    if count < 26:
+        print("   ❌ 加载MCP工具失败:缺少部分工具！")
+        await mcp_manager.close()
+        return
 
     try:
         # 获取工具描述文本
