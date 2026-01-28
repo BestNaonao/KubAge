@@ -1,5 +1,4 @@
 import asyncio
-import json
 import locale
 import os
 import platform
@@ -186,30 +185,6 @@ async def write_file(path: str, content: str) -> str:
         return str(ve)
     except Exception as e:
         return f"Error writing file: {str(e)}"
-
-
-@os_mcp_server.tool()
-async def get_system_info() -> str:
-    """
-    Get basic information about the host system.
-
-    Useful for determining compatibility (e.g., checking OS type or architecture
-    before pulling docker images).
-
-    Returns:
-        str: A JSON-formatted string containing:
-             - system: OS name (e.g., Linux, Darwin)
-             - release: OS version
-             - machine: Architecture (e.g., x86_64, arm64)
-             - workspace_root: The absolute path of the allowed workspace directory.
-    """
-    info = {
-        "system": platform.system(),
-        "release": platform.release(),
-        "machine": platform.machine(),
-        "workspace_root": ALLOWED_ROOT
-    }
-    return json.dumps(info, indent=2)
 
 
 @os_mcp_server.tool()
