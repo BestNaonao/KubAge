@@ -222,8 +222,8 @@ class PlanningNode:
         dynamic_system_instruction = self._generate_dynamic_system_instructions(state)
         dynamic_guidance = self._generate_dynamic_guidance(state)
 
-        for message in messages:
-            message.pretty_print()  # 临时调试使用
+        # for message in messages:
+        #     message.pretty_print()  # 临时调试使用
 
         # 调用链
         try:

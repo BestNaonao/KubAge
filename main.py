@@ -93,7 +93,7 @@ async def main():
         print("\n🚀 Agent Initialized. Ready for queries.")
 
         # 4. 运行 Agent (示例)
-        inputs = {"messages": [HumanMessage(content="请帮我在workspace文件夹下安装kubectl。")]}
+        inputs = {"messages": [HumanMessage(content="请帮我在workspace/bin文件夹下用curl安装kubectl。")]}
 
         # 使用 ainvoke 因为 ToolNode 是异步的
         async for event in app.astream(inputs):
