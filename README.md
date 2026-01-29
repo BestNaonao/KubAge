@@ -404,7 +404,15 @@ append_environment_variable(key: str, value: str)
 
 ### Agent概述
 
-KubAge新增了智能Agent模块，用于理解和分析用户在Kubernetes运维场景中的问题，并提供智能化的解决方案。Agent通过多轮对话理解用户意图，识别操作风险，并生成相应的检索Query来查询知识库。
+KubAge新增了基于ReAct模式的智能Agent模块，专门用于理解和分析用户在Kubernetes运维场景中的问题，并提供智能化的解决方案。Agent采用多节点协同工作的方式，通过感知输入、分析问题、规划行动、执行操作、自我调节和表达结果的循环流程来处理复杂的运维任务。
+
+### Agent ReAct模式
+
+Agent采用经典的ReAct（Reasoning and Acting）模式，结合了推理（Reasoning）和行动（Acting）两个核心能力：
+- **Reasoning**: 通过分析节点和规划节点进行深度思维链推理
+- **Acting**: 通过检索、工具调用等节点执行具体操作
+- **Self-Regulation**: 通过自我调节节点评估执行结果并决定下一步行动
+- **Adaptive Flow**: 支持根据评估结果动态调整执行路径，形成闭环反馈机制
 
 ### Agent状态结构 (AgentState)
 
@@ -412,60 +420,119 @@ Agent使用TypedDict定义状态结构，包含以下字段：
 
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
-| messages | List[BaseMessage] | 消息历史记录，使用operator.add实现追加模式 |
+| messages | Annotated[List[BaseMessage], operator.add] | 消息历史记录，使用operator.add实现追加模式 |
 | analysis | ProblemAnalysis \| None | 存储问题分析结果 |
-| retrieved_chunks | List[Document] \| None | 检索到的文档片段 |
-| generated_response | str \| None | 生成的响应结果 |
-| metadata | Dict[str, Any] \| None | 元数据信息 |
+| plan | ExecutionPlan \| None | 存储当前执行计划 |
+| retrieved_docs | List[Document] \| None | 检索到的文档片段 |
+| retrieval_attempts | int | 检索尝试次数，用于熔断机制 |
+| tool_output | str \| None | 工具执行输出结果 |
+| evaluation | SelfEvaluation \| None | 自我评估结果 |
 | error | str \| None | 错误信息 |
+| metadata | Dict[str, Any] \| None | 元数据信息 |
 
 ### Agent节点 (Nodes)
 
 Agent包含以下几种节点类型，每个节点负责不同的处理任务：
 
-#### 1. Analysis Node（分析节点）
+#### 1. Sensory Node（感知节点）
+- **功能**: 接收用户输入，注入环境上下文信息
+- **输入**: 用户消息
+- **输出**: 包含环境信息的消息状态
+- **处理流程**:
+  1. 检查是否已注入环境上下文
+  2. 获取系统信息（操作系统、架构、工作空间路径等）
+  3. 将环境信息作为SystemMessage注入到消息历史中
+
+#### 2. Analysis Node（分析节点）
 - **功能**: 对用户输入进行深度分析，提取关键信息
 - **输入**: 用户消息历史和当前输入
 - **输出**: 结构化的ProblemAnalysis对象
 - **处理流程**:
   1. 使用JsonOutputParser解析ProblemAnalysis模型
-  2. 通过LLM进行意图识别、实体提取和风险评估
-  3. 生成检索Query列表
-  4. 输出包含思维链推理的结构化分析结果
+  2. 通过思维链推理进行上下文消歧、实体提取、意图识别和风险评估
+  3. 生成技术摘要和检索Query列表
+  4. 输出包含完整推理过程的结构化分析结果
 
-#### 2. Retrieval Node（检索节点）
-- **功能**: 基于分析结果中的搜索查询，从Milvus知识库中检索相关文档
-- **输入**: 分析结果中的search_queries
+#### 3. Planning Node（规划节点）
+- **功能**: 基于分析结果制定执行计划
+- **输入**: 问题分析、文档知识、上轮计划、评估反馈
+- **输出**: ExecutionPlan对象
+- **处理流程**:
+  1. 根据状态动态生成系统指令（强制检索模式、工具修复模式、标准模式）
+  2. 使用动态提示词构造生成规划决策
+  3. 支持三种行动类型：RETRIEVE（检索）、TOOL_USE（工具调用）、DIRECT_ANSWER（直接回答）
+  4. 实现检索次数熔断机制，防止无限循环
+
+#### 4. Retrieval Node（检索节点）
+- **功能**: 基于规划节点的搜索查询，从Milvus知识库中检索相关文档
+- **输入**: 规划结果中的search_queries
 - **输出**: 检索到的相关文档片段列表
 - **处理流程**:
-  1. 获取上一节点的分析结果
+  1. 获取上一节点的规划结果
   2. 遍历所有搜索查询进行检索
   3. 对检索结果进行去重处理
-  4. 返回唯一文档片段列表
+  4. 调用重排序节点对结果进行精排
+  5. 返回最终的文档片段列表
 
-#### 3. Rerank Node（重排序节点）
-- **功能**: 对检索到的文档进行重排序，提高相关性
-- **输入**: 检索到的文档片段列表
-- **输出**: 重新排序后的文档片段列表
+#### 5. ToolCall Node（工具调用节点）
+- **功能**: 执行MCP注册的工具函数
+- **输入**: 规划结果中的工具名称和参数
+- **输出**: 工具执行结果
 - **处理流程**:
-  1. 基于操作类型生成动态指令
-  2. 使用Qwen3-Reranker模型计算文档相关性分数
-  3. 根据分数重新排序文档
-  4. 返回Top-N最相关文档
+  1. 从MCP工具管理器获取对应工具函数
+  2. 构造AI消息和工具消息记录交互过程
+  3. 异步执行工具调用
+  4. 解析和格式化工具输出结果
+  5. 将结果记录到消息历史中
 
-### 问题分析结构 (ProblemAnalysis)
+#### 6. Regulation Node（自我调节节点）
+- **功能**: 评估执行结果质量并决定下一步流向
+- **输入**: 分析结果、执行计划、执行结果
+- **输出**: SelfEvaluation对象
+- **处理流程**:
+  1. 根据当前动作类型（检索或工具调用）应用不同的评估标准
+  2. 评估结果质量（通过、需改进、失败）
+  3. 生成反馈信息和改进建议
+  4. 决定下一步行动（返回分析、规划、检索、工具调用或表达）
 
-ProblemAnalysis是Pydantic模型，包含以下字段：
+#### 7. Expression Node（表达节点）
+- **功能**: 生成最终的用户响应
+- **输入**: 执行计划和评估结果
+- **输出**: 最终响应消息
+- **处理流程**:
+  1. 检查是否存在直接回答内容
+  2. 根据评估结果决定是否返回反馈信息
+  3. 生成符合用户期望的最终响应
 
+### 数据Schema定义
+
+#### 问题分析Schema (ProblemAnalysis)
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
 | reasoning | str | 思维链推理过程：上下文消歧、意图分析、信息提取、风险判断 |
-| technical_summary | str | 用户问题的技术摘要，去除口语化表达 |
-| target_operation | OperationType | 目标操作类型 |
 | entities | List[NamedEntity] | 提取的关键命名实体列表 |
+| target_operation | OperationType | 目标操作类型 |
+| technical_summary | str | 用户问题的技术摘要，去除口语化表达 |
 | risk_level | RiskLevel | 操作风险等级 |
-| search_queries | List[str] | 用于知识库检索的Query列表 |
 | clarification_question | str \| None | 如果信息不足需要追问的问题 |
+
+#### 执行计划Schema (ExecutionPlan)
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| reasoning | str | 规划的理由，为什么选择这个动作 |
+| action | PlanAction | 下一步的具体动作类型 |
+| search_queries | List[str] \| None | 检索时使用的查询列表 |
+| tool_name | str \| None | 工具调用时的工具名称 |
+| tool_args | Dict[str, Any] \| None | 工具调用时的参数 |
+| final_answer | str \| None | 直接回答时的内容 |
+
+#### 自我评估Schema (SelfEvaluation)
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| reasoning | str | 评估理由 |
+| status | EvaluatedStatus | 当前步骤执行结果的评估状态 |
+| next_step | NextStep | 决定回退到哪一步或继续前进 |
+| feedback | str | 反馈给下一步骤的改进建议或错误信息 |
 
 ### 操作类型 (OperationType)
 
@@ -481,6 +548,7 @@ ProblemAnalysis是Pydantic模型，包含以下字段：
 | SCALING | 性能调优——水平伸缩 |
 | RESTART | 重启运行时 |
 | ROLLOUT | 回滚 |
+| INSTALL | 安装 |
 | PROXY | 代理 |
 | OTHER | 其他操作 |
 
@@ -493,79 +561,130 @@ ProblemAnalysis是Pydantic模型，包含以下字段：
 | HIGH | 配置变更、重启 |
 | CRITICAL | 删除资源、危险操作 |
 
-### Agent工作流模式
+### 规划行动类型 (PlanAction)
 
-Agent采用LangGraph构建有状态的工作流，支持以下模式：
+| 枚举值 | 说明 |
+|--------|------|
+| RETRIEVE | 查询知识库 |
+| TOOL_USE | 调用工具 |
+| DIRECT_ANSWER | 直接回答/任务结束 |
 
-1. **顺序执行模式**: 按照分析→检索→重排序的顺序执行
-2. **条件分支模式**: 根据分析结果决定后续处理路径
-3. **循环重试模式**: 在检索或重排序失败时进行重试
+### 评估状态 (EvaluatedStatus)
 
-### Agent节点测试和测试用例
+| 枚举值 | 说明 |
+|--------|------|
+| PASS | 执行成功 |
+| FAIL | 执行失败 |
+| NEEDS_REFINEMENT | 结果不理想，需要优化 |
 
-Agent的功能通过多种测试用例进行全面验证：
+### 下一步行动 (NextStep)
 
-#### 分析节点测试 (Analysis Node Tests)
-- **上下文实体提取**: 测试从多轮对话中提取实体的能力
-- **指代消歧**: 测试识别代词指代的具体资源（如"它"指代具体资源）
-- **意图识别**: 测试准确识别用户操作意图的能力
-- **风险评估**: 测试正确评估操作风险等级的能力
-- **检索Query生成**: 测试生成有效的知识库检索Query
+| 枚举值 | 说明 |
+|--------|------|
+| TO_ANALYSIS | 重新分析（意图理解有误） |
+| TO_PLANNING | 重新规划（更换工具或检索词） |
+| TO_RETRIEVAL | 重新检索 |
+| TO_TOOL | 重新调用工具 |
+| TO_EXPRESSION | 回答用户 |
 
-#### 检索节点测试 (Retrieval Node Tests)
-- **多Query检索**: 测试同时使用多个查询进行检索
-- **文档去重**: 测试对重复文档进行去重处理
-- **错误处理**: 测试单个查询失败时的容错机制
+### 动态提示词构造
 
-#### 重排序节点测试 (Rerank Node Tests)
-- **相关性评分**: 测试使用Qwen3-Reranker模型计算文档相关性
-- **动态指令**: 测试根据不同操作类型生成针对性指令
-- **批处理推理**: 测试高效处理大量文档对的能力
+Agent实现了高级的动态提示词构造机制：
+
+#### 1. 分层提示词设计
+- **基础系统提示**: 定义Agent角色和核心原则
+- **动态系统指令**: 根据当前状态切换不同模式（强制检索、工具修复、标准模式）
+- **用户提示模板**: 包含问题分析、文档知识、历史计划和评估反馈
+
+#### 2. 模式切换机制
+- **强制检索模式**: 适用于高风险操作或知识密集型任务
+- **强制工具修复模式**: 适用于工具调用失败需要参数修正
+- **标准模式**: 自由规划阶段，可根据信息充足度选择行动
+
+#### 3. 上下文感知
+- 根据检索尝试次数实施熔断机制
+- 基于评估反馈调整策略
+- 考虑历史消息中的工具输出结果
+
+### 图定义和流程控制
+
+#### 工作流图结构
+```
+START -> Sensory -> Analysis -> [Conditional: Clarification?]
+                                -> Expression (if clarification needed)
+                                -> Planning -> [Conditional: Action Type]
+                                    -> Retrieval -> Self-Regulation -> [Conditional: Next Step]
+                                    -> ToolCall -> Self-Regulation -> [Conditional: Next Step]
+                                    -> Expression -> END
+```
+
+#### 条件分支逻辑
+1. **分析分支**: 根据是否需要澄清问题决定是否直接表达
+2. **规划分支**: 根据规划动作类型决定流向检索或工具调用
+3. **调节分支**: 根据评估结果决定下一步行动方向
+
+#### 循环控制机制
+- **检索循环**: 评估失败时返回规划节点重新检索
+- **工具循环**: 工具失败时返回规划节点修复参数
+- **分析循环**: 意图理解错误时返回分析节点重新理解
+
+### Agent测试验证
+
+Agent的功能通过全面的测试用例进行验证：
+
+#### 节点独立测试
+- **分析节点**: 验证实体提取、意图识别、风险评估的准确性
+- **规划节点**: 测试动态模式切换和检索Query生成
+- **检索节点**: 验证文档去重和重排序效果
+- **工具节点**: 测试MCP工具调用和错误处理
+- **调节节点**: 验证评估逻辑和路径决策
+
+#### 端到端工作流测试
+- **简单问答**: 知识库查询场景
+- **复杂运维**: 故障诊断和修复流程
+- **工具调用**: 命令执行和结果处理
+- **错误恢复**: 异常情况下的流程恢复
 
 #### 具体测试场景包括：
-- **故障诊断场景**: 如"redis-cart连接问题"的上下文分析
-- **跨命名空间分析**: 处理涉及多个命名空间的复杂问题
-- **高风险操作识别**: 如删除操作的危险性识别
-- **水平伸缩操作**: 处理Deployment扩容等伸缩需求
+- **故障诊断场景**: Pod启动失败、服务不可达等问题
+- **高风险操作识别**: 删除资源、配置变更等需要确认的操作
 - **知识问答**: 纯理论问题的处理
-- **回滚操作**: 版本回滚等重大变更操作
-- **资源创建**: 新建Namespace等资源创建操作
-- **低风险查询**: 日志查看等只读操作
+- **工具调用**: kubectl命令执行、文件操作等
+- **多轮对话**: 需要澄清和迭代的问题
+- **错误处理**: 工具失败、检索无结果等情况
 
 ### Agent工作流示例
 
 ```python
-from langgraph.graph import StateGraph
-from agent.nodes.analysis_node import AnalysisNode
-from agent.nodes.retrieval_node import RetrievalNode
-from agent.nodes.rerank_node import RerankNode
+from langgraph.graph import StateGraph, START, END
+from agent.graph import build_react_agent
 from agent.state import AgentState
 from utils.llm_factory import get_chat_model
+from retriever.MilvusHybridRetriever import MilvusHybridRetriever
+from agent.nodes.rerank_node import RerankNode
 
-# 构建工作流
-workflow = StateGraph(AgentState)
-
-# 初始化各节点
+# 构建ReAct Agent
 llm = get_chat_model()
-analysis_node = AnalysisNode(llm)
-retrieval_node = RetrievalNode(retriever)
-rerank_node = RerankNode(model_path="../models/Qwen/Qwen3-Reranker-0.6B")
+retriever = MilvusHybridRetriever.from_existing_index(
+    collection_name="knowledge_base_v2",
+    embedding_field="vector",
+    sparse_embedding_field="sparse_vector",
+    title_sparse_field="title_sparse"
+)
+reranker = RerankNode(model_path="../models/Qwen/Qwen3-Reranker-0.6B")
 
-# 添加节点
-workflow.add_node("analyze_problem", analysis_node)
-workflow.add_node("retrieve_docs", retrieval_node)
-workflow.add_node("rerank_docs", rerank_node)
-
-# 定义边
-workflow.add_edge(START, "analyze_problem")
-workflow.add_edge("analyze_problem", "retrieve_docs")
-workflow.add_edge("retrieve_docs", "rerank_docs")
-workflow.add_edge("rerank_docs", END)
-
-app = workflow.compile()
+# 构建ReAct工作流
+app = build_react_agent(
+    llm=llm,
+    retriever=retriever,
+    reranker=reranker,
+    tool_descriptions="可用工具列表描述..."
+)
 
 # 运行工作流
-result = app.invoke({"messages": [HumanMessage(content="帮我排查nginx部署的连接问题")]})
+result = app.invoke({
+    "messages": [HumanMessage(content="帮我排查nginx部署的连接问题")]
+})
 ```
 
 ## 依赖包
