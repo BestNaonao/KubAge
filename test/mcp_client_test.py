@@ -105,6 +105,16 @@ async def run_tests():
                 "timeout": 1
             })
 
+            await invoke_tool("execute_command", {
+                "command": "kubectl version --client",
+                "timeout": 1,
+            })
+
+            await invoke_tool("execute_command", {
+                "command": "where kubectl",
+                "timeout": 10,
+            })
+
 
 
     print("🏁 All tests completed.")

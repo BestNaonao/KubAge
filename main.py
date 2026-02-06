@@ -16,7 +16,7 @@ from utils.mcp_manager import MCPToolManager
 
 
 async def main():
-    print("🚀 Starting Retrieval Node Workflow Test Batch...")
+    print("🚀 Starting Kubernetes Agent...")
     # 加载环境变量
     load_dotenv(find_dotenv())
     host = os.getenv('MILVUS_HOST', 'localhost')
