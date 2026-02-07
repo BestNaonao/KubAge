@@ -5,6 +5,9 @@ from graphviz import Digraph
 from langchain_core.documents import Document
 
 
+HLINK_PATTERN = re.compile(r'\[HLINK:\s*(.*?)]')
+
+
 def extract_blocks(content: str) -> tuple[str, list[Any]]:
     """提取提醒框和代码块，返回替换后的内容和块列表"""
     block_pattern = re.compile(
@@ -32,6 +35,23 @@ def restore_blocks(text: str, blocks: List[str]) -> str:
         return blocks[idx]
 
     return re.sub(r"@@BLOCK_(\d+)@@", replacer, text)
+
+
+def extract_hlink_from_text(text: str) -> tuple[str, list[str]]:
+    """
+    从文本中提取 [HLINK: url] 标记。
+    返回: (清洗后的文本, 提取出的URL列表)
+    """
+    if not text:
+        return "", []
+
+    links = HLINK_PATTERN.findall(text)
+    # 将 [HLINK: url] 替换为空字符串，避免粘连，或者直接删除
+    # 这里使用 strip() 去除标题可能留下的多余空格
+    clean_text = HLINK_PATTERN.sub('', text).strip()
+
+    return clean_text, links
+
 
 def get_node_label(doc: Document, length: int = 10) -> str:
     title = doc.metadata["title"]
