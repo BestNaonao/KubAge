@@ -78,7 +78,7 @@ class K8sCrawler(ABC):
         soup = BeautifulSoup(html, 'lxml')
         new_urls = self.extract_new_urls(soup, url)
         span_name = get_span_path(soup, url, NO_REF_URL)
-        markdown_content = convert_to_markdown(soup)
+        markdown_content = convert_to_markdown(soup, url)
         return new_urls, span_name, markdown_content
 
     def save(self, markdown_content: str, url: str, doc_name: str):

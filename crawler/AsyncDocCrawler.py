@@ -89,7 +89,7 @@ class AsyncDocCrawler(K8sCrawler):
 
 
 if __name__ == "__main__":
-    crawler = AsyncDocCrawler(num_workers=10, save_dir="../raw_data")
+    crawler = AsyncDocCrawler(num_workers=10, save_dir="../raw_data2")
     crawler.run()
     crawler.insert_title_at_regex_position(
         file_name="文档_参考_API 访问控制_用户认证.md",

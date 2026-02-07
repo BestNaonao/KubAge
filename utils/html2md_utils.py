@@ -1,4 +1,5 @@
 import re
+from urllib.parse import urljoin
 
 import html2text
 from bs4 import BeautifulSoup, Tag
@@ -69,7 +70,45 @@ def _normalize_tables(soup):
             for br_tag in cell.find_all("br"):
                 br_tag.replace_with("&lt;br&gt;")
 
-def convert_to_markdown(soup: BeautifulSoup) -> str:
+def _inject_topology_info(soup: Tag, base_url: str):
+    """
+    显式注入拓扑信息：
+    1. 为所有带 id 的 Header 注入入口标记 [HLINK: base_url#id]
+    2. 为所有带 href 的 Anchor 注入出口标记 [HLINK: absolute_url]
+    """
+
+    # 1. 处理入口 (Entry Points): Headers with IDs
+    # 遍历 h1-h6
+    for header in soup.find_all(re.compile(r'^h[1-6]$')):
+        header_id = header.get('id')
+        if header_id:
+            # 构建完整入口 URL
+            # 注意：base_url 应该是不带 #fragment 的页面 URL
+            entry_url = urljoin(base_url, f"#{header_id}")
+
+            # 构造注入文本，将标记追加到标题内容的末尾
+            # 使用 append 而不是 replace_with，可以保留标题内可能存在的 <code> 等格式
+            header.append(f" [HLINK: {entry_url}]")
+
+    # 2. 处理出口 (Exit Points): Anchors with href
+    for a_tag in soup.find_all('a', href=True):
+        href = a_tag['href']
+
+        # 过滤掉无效链接、JS脚本、锚点自身链接(可选)等
+        if not href or href.startswith(('javascript:', 'mailto:', 'tel:')):
+            continue
+
+        # 过滤掉标题旁边的 "aria-hidden" 永久链接图标，避免重复干扰
+        if a_tag.get('aria-hidden') == 'true':
+            continue
+
+        # 将相对路径转换为绝对路径
+        full_url = urljoin(base_url, href)
+
+        # 构造注入文本，将标记追加到链接文本的末尾
+        a_tag.append(f"[HLINK: {full_url}]")
+
+def convert_to_markdown(soup: BeautifulSoup, url: str) -> str:
     """将HTML内容转换为Markdown格式"""
     main_content = soup.find('main')
     if not main_content:
@@ -125,6 +164,9 @@ def convert_to_markdown(soup: BeautifulSoup) -> str:
 
     # 处理表格
     _normalize_tables(main_content)
+
+    # 注入 HLINK 拓扑信息，传入当前页面的 URL 作为 base_url
+    _inject_topology_info(main_content, url)
 
     # 添加标题前缀
     markdown_content = f"# {title}\n\n{breadcrumb_str}\n\n"
