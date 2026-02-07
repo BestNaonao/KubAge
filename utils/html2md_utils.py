@@ -168,8 +168,8 @@ def convert_to_markdown(soup: BeautifulSoup, url: str) -> str:
     # 注入 HLINK 拓扑信息，传入当前页面的 URL 作为 base_url
     _inject_topology_info(main_content, url)
 
-    # 添加标题前缀
-    markdown_content = f"# {title}\n\n{breadcrumb_str}\n\n"
+    # 添加标题前缀和网址
+    markdown_content = f"# {title}\n[HLINK: {url}]\n{breadcrumb_str}\n\n"
     markdown_content += html2text_processor.handle(str(main_content))
 
     # 后处理Markdown，将占位符替换为实际的代码块
