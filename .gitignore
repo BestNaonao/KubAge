@@ -16,7 +16,7 @@ __pycache__/
 
 # Others
 /models
-/raw_data
+/raw_data*
 /.idea
 /crawler/*.log
 *doc_tree*
