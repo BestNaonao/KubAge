@@ -94,19 +94,23 @@ def _inject_topology_info(soup: Tag, base_url: str):
     for a_tag in soup.find_all('a', href=True):
         href = a_tag['href']
 
-        # 过滤掉无效链接、JS脚本、锚点自身链接(可选)等
-        if not href or href.startswith(('javascript:', 'mailto:', 'tel:')):
-            continue
-
-        # 过滤掉标题旁边的 "aria-hidden" 永久链接图标，避免重复干扰
-        if a_tag.get('aria-hidden') == 'true':
+        # 过滤掉无效链接、JS脚本、锚点自身链接(可选)等，过滤掉标题旁边的 "aria-hidden" 永久链接图标，避免重复干扰
+        if not href or href.startswith(('javascript:', 'mailto:', 'tel:')) or a_tag.get('aria-hidden') == 'true':
             continue
 
         # 将相对路径转换为绝对路径
         full_url = urljoin(base_url, href)
+        anchor_text = a_tag.get_text(strip=True)  # 获取链接的显示文本
+        # 如果链接没有文本 (例如图片链接)，给一个默认值
+        if not anchor_text:
+            anchor_text = "link"
 
-        # 构造注入文本，将标记追加到链接文本的末尾
-        a_tag.append(f"[HLINK: {full_url}]")
+        # 使用更安全的 Key-Value 格式
+        # 格式: [ANCHOR: 文本, HLINK: 完整URL]
+        hlink_text = f"[ANCHOR: {anchor_text}, HLINK: {full_url}]"
+
+        # 直接替换 a 标签的内容
+        a_tag.string = hlink_text
 
 def convert_to_markdown(soup: BeautifulSoup, url: str) -> str:
     """将HTML内容转换为Markdown格式"""
