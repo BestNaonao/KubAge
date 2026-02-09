@@ -1,4 +1,5 @@
 import os
+import random
 
 from dotenv import load_dotenv, find_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -109,11 +110,11 @@ def kb_test(milvus: Milvus):
             print(doc.metadata['title'])
         return docs
 
-    print("=========“接下来”和“另请参见”导航章节测试")
+    print("========= “接下来”和“另请参见”导航章节测试 =========")
     condition_query("text like '%# 接下来%'")
     condition_query("text like '%# 另请参见%'")
 
-    print("=========API块测试")
+    print("========= API块测试 =========")
 
     condition_1 = "(text like '%# HTTP%')"
     condition_2 = "(text like '%# 参数%' or text like '%# Parameter%')"
@@ -148,7 +149,7 @@ def kb_test(milvus: Milvus):
     condition_query(f"{satisfy_only_one(condition_4, condition_5, condition_6)} and !{condition_7}")
 
 def title_test(milvus: Milvus):
-    print("=========标题字段测试")
+    print("========= 标题字段测试 =========")
     root_docs = milvus.search_by_metadata(
         expr="node_type == 'root'",
         limit = 1000
@@ -163,7 +164,7 @@ def title_test(milvus: Milvus):
         print(invalid_title)
 
 def nav_test(milvus: Milvus):
-    print("=========导航章节测试")
+    print("========= 导航章节测试 =========")
     invalid_nav_docs = milvus.search_by_metadata(
         expr="node_type != 'root' and (nav_next_step != '' or nav_see_also != '')",
         limit = 1000
@@ -171,9 +172,121 @@ def nav_test(milvus: Milvus):
     print(f"是否包含非根节点的导航内容: {len(invalid_nav_docs) != 0}")
 
 def rag_utils_test(milvus: Milvus):
-    print("=========RAG工具测试")
+    print("========= RAG工具测试 =========")
     print(get_full_node_content(milvus, "9a0c26a5-decf-5184-b5fc-9a2e7fce0cd6"))
 
+def hlink_cleanliness_test(milvus: Milvus):
+    print("========= 超链接残留测试 =========")
+    # 检测字段
+    fields_to_check = ["text", "title", "nav_next_step", "nav_see_also"]
+    # 检测模式
+    patterns = ["HLINK", "ANCHOR"]
+
+    total_dirty_docs = 0
+
+    # 也可以检查 related_links 字段是否解析正确（非字符串）
+
+    for field in fields_to_check:
+        for pattern in patterns:
+            # 构造模糊匹配表达式 (注意: Milvus 的 like 匹配大小写敏感)
+            expr = f'{field} like "%{pattern}%"'
+
+            try:
+                # 使用底层 pymilvus collection 进行查询
+                res = milvus.search_by_metadata(
+                    expr=expr,
+                    fields=["pk", "title"],
+                    limit=5  # 仅取样展示
+                )
+
+                if res:
+                    print(f"⚠️  [失败] 字段 '{field}' 中发现残留 '{pattern}' (示例):")
+                    for doc in res:
+                        print(f"    - PK: {doc.id} | Title: {doc.metadata.get('title', 'Unknown')}")
+                    total_dirty_docs += len(res)
+            except Exception as e:
+                # 某些字段可能因为长度问题无法执行 like 查询，视情况忽略
+                print(f"    [跳过] 字段 '{field}' 查询出错: {e}")
+
+    if total_dirty_docs == 0:
+        print("✅ 内容测试通过：未发现残留的 HLINK 或 ANCHOR 标记。")
+    else:
+        print(f"❌ 内容测试失败：发现潜在残留标记。")
+
+def graph_traversal_test(milvus: Milvus):
+    print("========= 图谱跳转测试 (Random Walk) =========")
+
+    # 1. 获取一批候选文档 (related_links 不为空)
+    # 由于 Milvus 对 JSON 字段的空值查询支持有限，我们先拉取一批非根节点文档进行筛选
+    try:
+        candidates_res = milvus.search_by_metadata(
+            expr='pk != ""',  # 获取所有文档（受限于 limit）
+            fields=["pk", "title", "related_links"],
+            limit=500
+        )
+    except Exception as e:
+        print(f"❌ 查询文档失败: {e}")
+        return
+
+    # 2. 在内存中筛选出 related_links 有内容的文档
+    valid_candidates = [
+        doc for doc in candidates_res
+        if doc.metadata.get("related_links") and len(doc.metadata.get("related_links")) > 0
+    ]
+
+    if len(valid_candidates) < 3:
+        print(f"⚠️ 有效链接文档不足 3 个 (当前: {len(valid_candidates)})，无法执行测试。")
+        return
+
+    # 3. 随机选择 3 个起点
+    start_docs = random.sample(valid_candidates, 3)
+
+    for i, start_doc in enumerate(start_docs, 1):
+        print(f"\n🔗 [路径 {i}]")
+        current_doc = start_doc
+        print(f"   🚩 起点: {current_doc.metadata.get('title')}")
+
+        steps = 0
+        max_steps = 5
+
+        while steps < max_steps:
+            # 获取当前文档的所有链接
+            links = current_doc.metadata.get("related_links", [])
+
+            # 筛选出内部链接 (type == 'internal' 且 pk 存在)
+            internal_links = [
+                l for l in links
+                if l.get("type") == "internal" and l.get("pk")
+            ]
+
+            if not internal_links:
+                print("      🛑 停止: 当前文档无内部链接")
+                break
+
+            # 随机选择一个链接进行跳跃
+            chosen_link = random.choice(internal_links)
+            target_pk = chosen_link['pk']
+            anchor_text = chosen_link.get('text', 'unknown')
+
+            # 查询目标文档
+            next_docs = milvus.search_by_metadata(
+                expr=f'pk == "{target_pk}"',
+                fields=["pk", "title", "related_links"]
+            )
+
+            if not next_docs:
+                print(f"      ⚠️ 错误: 链接指向的 PK {target_pk} 不存在 (死链)")
+                break
+
+            next_doc = next_docs[0]
+            print(f"      ⬇️  (点击: '{anchor_text}')")
+            print(f"   📍 跳跃至: {next_doc.metadata.get('title')}")
+
+            current_doc = next_doc
+            steps += 1
+
+        if steps == max_steps:
+            print("      🏁 达到最大跳跃次数")
 
 def main():
     embedding_path = "../models/Qwen/Qwen3-Embedding-0.6B"   # 相对路径：从当前脚本所在目录出发
@@ -188,11 +301,15 @@ def main():
         }
     )
     # basic_test(embedding_model, "my_collection")
-    kb_v2_store = milvus_store(embedding_model, "knowledge_base_v2")
-    kb_test(kb_v2_store)
-    title_test(kb_v2_store)
-    nav_test(kb_v2_store)
-    rag_utils_test(kb_v2_store)
+    kb_store = milvus_store(embedding_model, "knowledge_base_v3")
+    kb_test(kb_store)
+    title_test(kb_store)
+    nav_test(kb_store)
+    rag_utils_test(kb_store)
+
+    # 执行新测试
+    hlink_cleanliness_test(kb_store)
+    graph_traversal_test(kb_store)
 
 
 if __name__ == '__main__':
