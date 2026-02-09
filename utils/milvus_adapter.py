@@ -3,8 +3,8 @@ Milvus 适配器：处理 Document 对象与 Milvus 数据格式之间的双向�
 包括元数据序列化、反序列化、CSR 矩阵转换以及结果解析
 """
 
-import json
 from typing import Dict, Any
+
 from langchain_core.documents import Document
 from pymilvus import Hit
 
@@ -28,10 +28,7 @@ def encode_metadata_for_milvus(metadata: Dict[str, Any]) -> Dict[str, Any]:
     encoded_metadata = {}
     
     for key, value in metadata.items():
-        if isinstance(value, list):
-            # 将列表转换为JSON字符串
-            encoded_metadata[key] = json.dumps(value, ensure_ascii=False)
-        elif isinstance(value, NodeType):
+        if isinstance(value, NodeType):
             # 将枚举转换为字符串值
             encoded_metadata[key] = value.value
         else:
@@ -50,13 +47,7 @@ def decode_metadata_from_milvus(encoded_metadata: Dict[str, Any]) -> Dict[str, A
     decoded_metadata = {}
     
     for key, value in encoded_metadata.items():
-        if key == 'child_ids' and isinstance(value, str):
-            # 将child_ids的JSON字符串转换回列表
-            try:
-                decoded_metadata[key] = json.loads(value)
-            except json.JSONDecodeError:
-                decoded_metadata[key] = []
-        elif key == 'node_type' and isinstance(value, str):
+        if key == 'node_type' and isinstance(value, str):
             # 将node_type字符串转换回枚举
             try:
                 decoded_metadata[key] = NodeType(value)
