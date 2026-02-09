@@ -119,17 +119,22 @@ class MarkdownTreeParser:
         for field in ["nav_next_step", "nav_see_also"]:
             raw_content = root_doc.metadata.get(field, "")
             if raw_content:
-                # 1. 清洗文本并提取链接
-                clean_content, nav_outlinks = extract_exit_hlink(raw_content)
+                # 1. 提取并清洗入口链接 (HLINK) -> 对应标题锚点 (如 #whats-next)
+                content_after_entry, nav_anchors = extract_entry_hlink(raw_content)
 
-                # 2. 更新元数据文本
-                root_doc.metadata[field] = clean_content
+                # 2. 提取并清洗出口链接 (ANCHOR+HLINK) -> 对应正文里的超链接
+                final_clean_content, nav_outlinks = extract_exit_hlink(content_after_entry)
 
-                # 3. 将提取到的链接合并到根节点的 outlinks 字典中
-                # 根节点作为整个页面的代表，拥有这些导航链接的“所有权”是合理的
+                # 3. 更新元数据文本，保证文本干净
+                root_doc.metadata[field] = final_clean_content
+
+                # 4. 把导航章节的入口锚点，归属给根节点
+                if nav_anchors:
+                    root_doc.metadata["anchors"].extend(nav_anchors)
+
+                # 5. 把导航章节的外链，合并到根节点的出链字典中
                 if "outlinks" not in root_doc.metadata:
                     root_doc.metadata["outlinks"] = {}
-
                 merge_outlinks(root_doc.metadata["outlinks"], nav_outlinks)
 
         return self.documents
