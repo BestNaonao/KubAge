@@ -70,6 +70,32 @@ def _normalize_tables(soup):
             for br_tag in cell.find_all("br"):
                 br_tag.replace_with("&lt;br&gt;")
 
+def _fix_code_tags(soup: BeautifulSoup):
+    """
+    修复嵌套或空的 code/tt 标签，防止 html2text 转换出连续的 ``` 破坏 Markdown 结构
+    例如: <tt>text<tt></tt></tt> -> <tt>text</tt>
+    """
+    # 1. 移除空的 tt/code 标签 (无文本且无子标签)
+    for tag in soup.find_all(['tt', 'code']):
+        if not tag.get_text(strip=True) and not tag.find_all(True):
+            tag.decompose()
+
+    # 2. 解包嵌套的 tt/code 标签 (Flatten nested tags)
+    # 循环直到没有嵌套为止 (处理多层嵌套)
+    while True:
+        # 查找所有父级也是 tt/code 的标签
+        nested_tags = [
+            t for t in soup.find_all(['tt', 'code'])
+            if t.find_parent(['tt', 'code'])
+        ]
+
+        if not nested_tags:
+            break
+
+        for tag in nested_tags:
+            # unwrap() 会移除标签本身但保留其内容（文本和子标签）
+            tag.unwrap()
+
 def _inject_topology_info(soup: Tag, base_url: str):
     """
     显式注入拓扑信息：
@@ -168,6 +194,9 @@ def convert_to_markdown(soup: BeautifulSoup, url: str) -> str:
 
     # 处理表格
     _normalize_tables(main_content)
+
+    # 修复脏数据导致的 code/tt 标签嵌套问题
+    _fix_code_tags(main_content)
 
     # 注入 HLINK 拓扑信息，传入当前页面的 URL 作为 base_url
     _inject_topology_info(main_content, url)
