@@ -194,3 +194,92 @@ class K8sCrawler(ABC):
         except Exception as e:
             print(f"处理文件时发生错误: {e}")
             return False
+
+    def move_content_by_regex(
+            self,
+            file_name: str,
+            source_pattern: str,
+            target_pattern: str,
+            insert_after_group: int = 0
+    ) -> bool:
+        """
+        将文件中匹配 source_pattern 的内容移动到 target_pattern 指定位置
+
+        参数:
+        file_name (str): 文件名（不含路径）
+        source_pattern (str): 源内容正则表达式（要移动的内容）
+        target_pattern (str): 目标位置正则表达式（需包含分组以精确定位插入点）
+        insert_after_group (int):
+            - -1: 在整个目标匹配开始前插入
+            - 0: 在整个目标匹配结束后插入
+            - n>0: 在第n个捕获分组结束后插入（推荐用于精确定位）
+
+        返回:
+        bool: 操作是否成功
+        """
+        try:
+            file_path = os.path.join(self.save_dir, file_name)
+
+            # 读取文件内容
+            with open(file_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+
+            # 步骤1: 查找并提取源内容（只处理第一个匹配）
+            source_match = re.search(source_pattern, content, flags=re.MULTILINE | re.DOTALL)
+            if not source_match:
+                print(f"❌ 未找到源内容匹配: {source_pattern}")
+                return False
+
+            source_text = source_match.group()
+            source_start, source_end = source_match.span()
+
+            # 步骤2: 查找目标位置（在原始内容中定位，避免删除后位置偏移）
+            target_match = re.search(target_pattern, content, flags=re.MULTILINE | re.DOTALL)
+            if not target_match:
+                print(f"❌ 未找到目标位置匹配: {target_pattern}")
+                return False
+
+            # 步骤3: 计算插入位置（考虑源内容删除对目标位置的影响）
+            if insert_after_group == -1:
+                insert_pos = target_match.start()
+            elif insert_after_group == 0:
+                insert_pos = target_match.end()
+            else:
+                # 验证分组索引有效性
+                if insert_after_group > len(target_match.groups()):
+                    print(f"❌ 目标匹配仅包含 {len(target_match.groups())} 个分组，无法使用分组 {insert_after_group}")
+                    return False
+                insert_pos = target_match.end(insert_after_group)
+
+            # 调整插入位置：如果源内容在目标位置之前，删除后目标位置会前移
+            if source_end <= insert_pos:
+                insert_pos -= (source_end - source_start)
+
+            # 步骤4: 构建新内容（先删除源内容，再在目标位置插入）
+            # 先删除源内容（保留原始内容用于位置计算）
+            content_without_source = content[:source_start] + content[source_end:]
+
+            # 在调整后的位置插入
+            new_content = (
+                    content_without_source[:insert_pos] +
+                    f" {source_text}" +
+                    content_without_source[insert_pos:]
+            )
+
+            # 步骤5: 写回文件
+            with open(file_path, 'w', encoding='utf-8') as file:
+                file.write(new_content)
+
+            # 输出调试信息
+            source_preview = source_text[:60].replace('\n', '\\n') + ("..." if len(source_text) > 60 else "")
+            print(f"✅ 成功移动内容: '{source_preview}'")
+            print(f"   源位置: 第{content[:source_start].count(chr(10)) + 1}行")
+            print(f"   目标位置: 第{content[:insert_pos].count(chr(10)) + 1}行 (分组{insert_after_group}后)")
+            return True
+
+        except FileNotFoundError:
+            print(f"❌ 文件不存在: {file_name}")
+            return False
+        except Exception as e:
+            print(f"❌ 处理文件时发生错误: {type(e).__name__}: {e}")
+            return False
