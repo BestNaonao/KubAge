@@ -101,3 +101,30 @@ if __name__ == "__main__":
         regex_pattern=r"3\.1415926535[\s\S]*?```",
         substitute="3.1415926535...\n```"
     )
+    crawler.replace_content_by_regex(
+        file_name="文档_文档.md",
+        regex_pattern=r"\[HLINK: [^\]]*?\]",
+        substitute=""
+    )
+    crawler.replace_content_by_regex(
+        file_name="文档_入门.md",
+        regex_pattern=r"\[HLINK: [^\]]*?\]",
+        substitute=""
+    )
+    crawler.replace_content_by_regex(
+        file_name="文档_教程.md",
+        regex_pattern=r"\[HLINK: [^\]]*?\]",
+        substitute=""
+    )
+    crawler.replace_content_by_regex(
+        file_name="文档_参考.md",
+        regex_pattern=r"\[HLINK: [^\]]*?\]",
+        substitute=""
+    )
+    # 将 [HLINK:...] 移动到 "### 流量分发控制" 标题行末尾（换行符前）
+    crawler.move_content_by_regex(
+        file_name="文档_概念_服务、负载均衡和联网_服务（Service）.md",
+        source_pattern=r'\[HLINK:[^\]]*#流量分发控制[^\]]*\]',
+        target_pattern=r'(### 流量分发控制[^\n]*)\n',
+        insert_after_group=1  # 在分组1（标题文本）结束后插入，即换行符前
+    )
