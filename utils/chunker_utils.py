@@ -1,11 +1,17 @@
 import re
-from typing import List, Any
+from typing import List, Any, Dict, Tuple
 
 from graphviz import Digraph
 from langchain_core.documents import Document
 
 
-HLINK_PATTERN = re.compile(r'\[HLINK:\s*(.*?)]')
+# 1. 简单的 HLINK 模式 (用于标题/入口)
+# 匹配: [HLINK: https://...]
+SIMPLE_HLINK_PATTERN = re.compile(r'\[HLINK:\s*(.*?)]')
+
+# 2. 复杂的 ANCHOR+HLINK 模式 (用于正文/出口)
+# 匹配: [ANCHOR: 文本, HLINK: https://...]
+COMPLEX_HLINK_PATTERN =re.compile(r'\\?\[ANCHOR:\s*(.*?),\s*HLINK:\s*(.*?)\\?]')
 
 
 def extract_blocks(content: str) -> tuple[str, list[Any]]:
@@ -37,20 +43,74 @@ def restore_blocks(text: str, blocks: List[str]) -> str:
     return re.sub(r"@@BLOCK_(\d+)@@", replacer, text)
 
 
-def extract_hlink_from_text(text: str) -> tuple[str, list[str]]:
+def extract_entry_hlink(text: str) -> Tuple[str, List[str]]:
     """
-    从文本中提取 [HLINK: url] 标记。
-    返回: (清洗后的文本, 提取出的URL列表)
+    【入口提取】专门用于处理标题行。
+    输入: "## Title [HLINK: url]"
+    输出: ("## Title", ["url"])
     """
     if not text:
         return "", []
 
-    links = HLINK_PATTERN.findall(text)
-    # 将 [HLINK: url] 替换为空字符串，避免粘连，或者直接删除
-    # 这里使用 strip() 去除标题可能留下的多余空格
-    clean_text = HLINK_PATTERN.sub('', text).strip()
+    links = SIMPLE_HLINK_PATTERN.findall(text)
+    # 直接移除标记，保留标题文字
+    clean_text = SIMPLE_HLINK_PATTERN.sub('', text).strip()
 
     return clean_text, links
+
+
+def extract_exit_hlink(text: str) -> Tuple[str, Dict[str, List[str]]]:
+    """
+    【出口提取】专门用于处理正文内容的超链接。
+    输入: "Click [ANCHOR: here, HLINK: url]..."
+    输出: ("Click here...", {"here": ["url"]})
+    """
+    if not text:
+        return "", {}
+
+    outlinks_map = {}
+
+    def replacer(match):
+        # group(1): Anchor Text
+        # group(2): URL
+        anchor_text = match.group(1).strip()
+        url = match.group(2).strip()
+
+        # 将 URL 记录到字典列表
+        if anchor_text not in outlinks_map:
+            outlinks_map[anchor_text] = []
+        # 避免同一个位置重复添加相同的 URL (虽然罕见)
+        if url not in outlinks_map[anchor_text]:
+            outlinks_map[anchor_text].append(url)
+
+        # 还原正文：只保留 Anchor Text，去掉 HLINK 标记。前后加空格防止粘连
+        return f" {anchor_text} "
+
+    clean_text = COMPLEX_HLINK_PATTERN.sub(replacer, text)
+    # 清理多余空格 (把 "  " 变 " ")
+    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+
+    return clean_text, outlinks_map
+
+
+def merge_outlinks(
+        target: Dict[str, List[str]],
+        source: Dict[str, List[str]]
+) -> None:
+    """
+    原地合并 outlinks 字典 (用于 TreeParser)
+    target: 被更新的字典
+    source: 新增数据的字典
+    """
+    for text, urls in source.items():
+        if text not in target:
+            target[text] = []
+        # 合并 URL 列表并去重
+        existing = set(target[text])
+        for u in urls:
+            if u not in existing:
+                target[text].append(u)
+                existing.add(u)
 
 
 def get_node_label(doc: Document, length: int = 10) -> str:
