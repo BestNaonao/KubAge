@@ -3,15 +3,15 @@ import re
 import uuid
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Any, Tuple, Set
 from queue import PriorityQueue
+from typing import Dict, List, Any, Tuple
 
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_experimental.text_splitter import SemanticChunker
+from langchain_huggingface import HuggingFaceEmbeddings
 from transformers import PreTrainedTokenizerBase
 
-from utils.chunker_utils import extract_blocks, restore_blocks, extract_hlink_from_text
+from utils.chunker_utils import extract_blocks, restore_blocks, extract_entry_hlink, extract_exit_hlink, merge_outlinks
 
 
 class NodeType(Enum):
@@ -91,16 +91,15 @@ class MarkdownTreeParser:
         #    这会把 #### HTTP 请求 变成 **HTTP 请求**
         #    从而避免后续的 _build_subtree 将其拆分
         processed_content = MarkdownTreeParser.preprocess_api_blocks(processed_content)
+        file_name = os.path.basename(file_path).removesuffix('.md')
 
         # 创建根节点
-        file_name = os.path.basename(file_path).removesuffix('.md')
         root_doc = MarkdownTreeParser._create_document_node(
             content=processed_content.strip(),
             source=file_path.as_posix(),
             parent_id='',
             level=0,
             title=file_name,
-            token_count=0,
             node_type=NodeType.ROOT
         )
         # 构建文档树
@@ -111,7 +110,7 @@ class MarkdownTreeParser:
 
         # 添加回文件头部
         if header_content:
-            clean_header, root_anchors = extract_hlink_from_text(header_content)
+            clean_header, root_anchors = extract_entry_hlink(header_content)
             root_doc.page_content = clean_header + root_doc.page_content
             root_doc.metadata["anchors"].extend(root_anchors)
             root_doc.metadata["token_count"] = self.count_tokens(root_doc.page_content)
@@ -131,7 +130,7 @@ class MarkdownTreeParser:
             parent_id: str,
             level: int,
             title: str,
-            token_count: int,
+            token_count: int = 0,
             node_type: NodeType = NodeType.LEAF,
             child_ids: List[str] = None,
             left_sibling: str = '',
@@ -141,7 +140,7 @@ class MarkdownTreeParser:
             nav_next_step: str = '',
             nav_see_also: str = '',
             anchors: List[str] = None,
-            outlinks: Set[str] = None,
+            outlinks: Dict[str, List[str]] = None,
     ) -> Document:
         """创建文档节点
 
@@ -178,14 +177,14 @@ class MarkdownTreeParser:
             "nav_next_step": nav_next_step,
             "nav_see_also": nav_see_also,
             "anchors": anchors if anchors else [],
-            "outlinks": outlinks if outlinks else set(),
+            "outlinks": outlinks if outlinks else {},
         }
 
         doc = Document(page_content=content, metadata=metadata)
         setattr(doc, 'id', MarkdownTreeParser._generate_node_id(title))
         return doc
 
-    def _finalize(self, extracted_content: str, extracted_blocks: List[str]) -> Tuple[str, Set[str], int]:
+    def _finalize(self, extracted_content: str, extracted_blocks: List[str]) -> Tuple[str, Dict[str, List[str]], int]:
         """
         【整体封装方法】
         1. 恢复代码块 (restore_blocks)
@@ -197,16 +196,13 @@ class MarkdownTreeParser:
             extracted_blocks: 被提取的原子块列表
 
         返回:
-            (最终文本, 出口链接列表, Token数量)
+            (最终文本, 出口链接字典, Token数量)
         """
-        # 1. 恢复块内容
         restored_content = restore_blocks(extracted_content, extracted_blocks)
-        # 2. 提取并清洗外链
-        final_content, outlinks = extract_hlink_from_text(restored_content)
-        # 2. 计算token数量
+        final_content, outlinks_map = extract_exit_hlink(restored_content)
         token_count = self.count_tokens(final_content)
 
-        return final_content, set(outlinks), token_count
+        return final_content, outlinks_map, token_count
 
     def _build_subtree(self, parent_id: str, root_doc: Document, extracted_blocks: List[Any]) -> None:
         """
@@ -223,10 +219,7 @@ class MarkdownTreeParser:
         parent_content = parent_doc.page_content
 
         # 查找当前层级下的所有子标题
-        heading_pattern = re.compile(
-            rf"^({'#' * (parent_level + 1)})\s+(.*)",
-            re.MULTILINE
-        )
+        heading_pattern = re.compile(rf"^({'#' * (parent_level + 1)})\s+(.*)", re.MULTILINE)
         matches = list(heading_pattern.finditer(parent_content))
 
         if len(matches) != 0:
@@ -242,8 +235,17 @@ class MarkdownTreeParser:
                 end_pos = matches[idx + 1].start() if idx + 1 < len(matches) else len(parent_content)
                 # 在处理标题行时，立刻分离 标题文本 和 超链接入口锚点
                 raw_title = match.group(2).strip()
-                section_title, title_anchors = extract_hlink_from_text(raw_title)
+                section_title, title_anchors = extract_entry_hlink(raw_title)
                 section_content = parent_content[start_pos:end_pos].strip()
+
+                # section_content 的第一行必然是该 Header。
+                # 我们利用已经清洗好的 section_title 重组第一行。
+                lines = section_content.split('\n')
+                if lines:
+                    # match.group(1) 是 "##" 这种层级符号
+                    # section_title 是 "操作" (无 HLINK)
+                    lines[0] = f"{match.group(1)} {section_title}"
+                    section_content = "\n".join(lines)
 
                 # 处理重复标题
                 title_counter[section_title] = title_counter.get(section_title, 0) + 1
@@ -269,7 +271,6 @@ class MarkdownTreeParser:
                     parent_id=parent_id,
                     level=parent_level + 1,
                     title=full_title,
-                    token_count=0,
                     anchors=title_anchors,
                 )
                 node_id = child_doc.id
@@ -400,9 +401,8 @@ class MarkdownTreeParser:
         doc.metadata["node_type"] = NodeType.CONTAINER
         doc.metadata["child_ids"] = []  # 清空（原为叶子，无子）
         # 可选：保留标题行作为 page_content，或置空
-        # 这里保留原始标题行（如 "## 标题"）以维持可读性
-        # 若原始内容无标题行，可设为空
-        clean_line, _ = extract_hlink_from_text(doc.page_content.split('\n')[0])
+        # 这里保留原始标题行（如 "## 标题"）以维持可读性。若原始内容无标题行，可设为空
+        clean_line, _ = extract_entry_hlink(doc.page_content.split('\n')[0])
         doc.page_content = clean_line   # 保守做法
 
         # === 步骤4: 创建子节点 ===
@@ -415,7 +415,6 @@ class MarkdownTreeParser:
                 level=doc.metadata["level"] + 1,
                 title=child_title,
                 token_count=chunk['tokens'],
-                node_type=NodeType.LEAF,
                 from_split=True,
                 outlinks=chunk['outlinks']
             )
@@ -507,7 +506,7 @@ class MarkdownTreeParser:
             if doc.metadata["node_type"] != NodeType.ROOT:
                 doc.metadata["node_type"] = NodeType.LEAF
             doc.metadata["anchors"].extend(merged_children[0].metadata["anchors"])
-            doc.metadata["outlinks"].update(merged_children[0].metadata["outlinks"])
+            merge_outlinks(doc.metadata["outlinks"], merged_children[0].metadata["outlinks"])
 
             # 标记子节点待删除
             nodes_to_remove.add(merged_children[0].id)
@@ -521,10 +520,10 @@ class MarkdownTreeParser:
         last_titles = [leaf.metadata["title"].split('_')[-1] for leaf in nodes]
         merged_title = f"{parent_title}_{'~'.join(last_titles)}"
         merged_anchors = []
-        merged_outlinks = set()
+        merged_outlinks = {}
         for node in nodes:
             merged_anchors.extend(node.metadata["anchors"])
-            merged_outlinks.update(node.metadata["outlinks"])
+            merge_outlinks(merged_outlinks, node.metadata.get("outlinks", {}))
 
         return MarkdownTreeParser._create_document_node(
             content=merged_content,
