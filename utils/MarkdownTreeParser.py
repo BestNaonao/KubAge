@@ -115,6 +115,23 @@ class MarkdownTreeParser:
             root_doc.metadata["anchors"].extend(root_anchors)
             root_doc.metadata["token_count"] = self.count_tokens(root_doc.page_content)
 
+        # 清洗 nav_next_step 和 nav_see_also 字段。提取其中的超链接并合并到 root_doc.outlinks 中
+        for field in ["nav_next_step", "nav_see_also"]:
+            raw_content = root_doc.metadata.get(field, "")
+            if raw_content:
+                # 1. 清洗文本并提取链接
+                clean_content, nav_outlinks = extract_exit_hlink(raw_content)
+
+                # 2. 更新元数据文本
+                root_doc.metadata[field] = clean_content
+
+                # 3. 将提取到的链接合并到根节点的 outlinks 字典中
+                # 根节点作为整个页面的代表，拥有这些导航链接的“所有权”是合理的
+                if "outlinks" not in root_doc.metadata:
+                    root_doc.metadata["outlinks"] = {}
+
+                merge_outlinks(root_doc.metadata["outlinks"], nav_outlinks)
+
         return self.documents
 
     @staticmethod
