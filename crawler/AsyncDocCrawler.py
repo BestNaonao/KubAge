@@ -102,6 +102,11 @@ if __name__ == "__main__":
         substitute="3.1415926535...\n```"
     )
     crawler.replace_content_by_regex(
+        file_name="文档_任务_管理集群_从 Dockershim 迁移_从 dockershim 迁移遥测和安全代理.md",
+        regex_pattern=r'###\s*\[ANCHOR:\s*([^,]+?)\s*,\s*HLINK:[^\]]*\]\s*(.*)',
+        substitute=r'### \1 \2'
+    )
+    crawler.replace_content_by_regex(
         file_name="文档_文档.md",
         regex_pattern=r"\[HLINK: [^\]]*?\]",
         substitute=""
