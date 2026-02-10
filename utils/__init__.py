@@ -7,7 +7,7 @@ from .milvus_adapter import (
     decode_document_from_milvus,
     csr_to_milvus_format
 )
-from .MarkdownTreeParser import MarkdownTreeParser, NodeType
+from .MarkdownTreeParser import MarkdownTreeParser, NodeType, generate_node_id
 from .chunker_utils import extract_blocks, restore_blocks
 from .html2md_utils import convert_to_markdown
 
@@ -21,5 +21,6 @@ __all__ = [
     "encode_document_for_milvus",
     "decode_document_from_milvus",
     "csr_to_milvus_format",
-    "convert_to_markdown"
+    "convert_to_markdown",
+    "generate_node_id",
 ]

@@ -14,6 +14,10 @@ from transformers import PreTrainedTokenizerBase
 from utils.chunker_utils import extract_blocks, restore_blocks, extract_entry_hlink, extract_exit_hlink, merge_outlinks
 
 
+def generate_node_id(title: str) -> str:
+    """生成基于标题的唯一节点ID"""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, title))
+
 class NodeType(Enum):
     ROOT = "root"
     SECTION = "section"
@@ -140,11 +144,6 @@ class MarkdownTreeParser:
         return self.documents
 
     @staticmethod
-    def _generate_node_id(title: str) -> str:
-        """生成基于标题的唯一节点ID"""
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, title))
-
-    @staticmethod
     def _create_document_node(
             content: str,
             *,
@@ -203,7 +202,7 @@ class MarkdownTreeParser:
         }
 
         doc = Document(page_content=content, metadata=metadata)
-        setattr(doc, 'id', MarkdownTreeParser._generate_node_id(title))
+        setattr(doc, 'id', generate_node_id(title))
         return doc
 
     def _finalize(self, extracted_content: str, extracted_blocks: List[str]) -> Tuple[str, Dict[str, List[str]], int]:
