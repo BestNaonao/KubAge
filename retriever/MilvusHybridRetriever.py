@@ -12,7 +12,7 @@ from pymilvus import (
 )
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
-from utils.milvus_adapter import csr_to_milvus_format, decode_hit_to_document, SCALAR_FIELDS
+from utils.milvus_adapter import csr_to_milvus_format, decode_hit_to_document, HYBRID_SEARCH_FIELDS
 
 
 class MilvusHybridRetriever(BaseRetriever):
@@ -88,7 +88,7 @@ class MilvusHybridRetriever(BaseRetriever):
                 reqs=search_requests,
                 rerank=RRFRanker(),  # 或者使用 WeightedRanker(0.6, 0.2, 0.2)
                 limit=self.top_k,
-                output_fields=SCALAR_FIELDS # 只拉取所有标量，不拉取向量
+                output_fields=HYBRID_SEARCH_FIELDS # 只拉取所有标量和摘要向量字段，为拓扑扩展做准备
             )
         except Exception as e:
             self.logger.error(f"Hybrid search failed: {e}")  # 建议使用日志而非print

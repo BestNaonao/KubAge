@@ -19,6 +19,8 @@ SCALAR_FIELDS = [
     "entry_urls", "related_links", "summary",
 ]
 
+HYBRID_SEARCH_FIELDS = SCALAR_FIELDS + ["summary_vector",]
+
 
 def encode_metadata_for_milvus(metadata: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -101,8 +103,8 @@ def decode_hit_to_document(hit: Hit, content_field: str = "text") -> Document:
     # 3. 提取所有元数据字段
     raw_metadata = {}
     for field in entity.keys():
-        # 只放入非正文的标量字段
-        if field != content_field and field in SCALAR_FIELDS:
+        # 只放入所需字段
+        if field != content_field and field in HYBRID_SEARCH_FIELDS:
             raw_metadata[field] = entity.get(field)
 
     # 4. 注入 Milvus 特有的信息 (Primary Key 和 Score)
