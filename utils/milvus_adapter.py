@@ -15,7 +15,8 @@ SCALAR_FIELDS = [
     "pk", "text", "source", "title",
     "parent_id", "child_ids", "node_type", "level",
     "token_count", "left_sibling", "right_sibling",
-    "from_split", "merged", "nav_next_step", "nav_see_also"
+    "from_split", "merged", "nav_next_step", "nav_see_also",
+    "entry_urls", "related_links", "summary",
 ]
 
 
