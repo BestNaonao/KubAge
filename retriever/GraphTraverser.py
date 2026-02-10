@@ -1,12 +1,11 @@
 import logging
-from typing import List, Set, Any
+from typing import List, Set, Dict
 
 import numpy as np
 from langchain_core.documents import Document
 from pymilvus import Collection
 
-# 配置日志
-logger = logging.getLogger(__name__)
+from utils import generate_node_id
 
 
 class GraphTraverser:
@@ -14,7 +13,8 @@ class GraphTraverser:
     图拓扑扩展器
     负责基于初始锚点文档 (Anchors) 进行父级递归扩展和链接拓扑扩展
     """
-
+    # 配置日志
+    logger = logging.getLogger(__name__)
     def __init__(
             self,
             milvus_collection_name: str,
@@ -61,84 +61,84 @@ class GraphTraverser:
 
     def _expand_parents(self, anchors: List[Document], query_vec: List[float], existing_pks: Set[str]) -> List[Document]:
         """
-        向上递归扩展父节点
+        基于 Title 面包屑结构一次性溯源，向上扩展父节点
         逻辑：Sim_j >= Sim_child * Threshold
         """
-        expanded_docs = []
+        # 1. 计算所有潜在的祖先节点 ID
+        # Map: anchor_pk -> ancestor_ids (按 parent -> root 排序)
+        lineage_map: Dict[str, List[str]] = {}
+        all_ancestor_pks = set()
 
-        # 队列：存储 (doc_id, child_similarity_score, source_anchor_text)
-        # 初始阶段，我们将 anchor 视为 "child"，其 similarity 设为 1.0 (或者基于检索分，这里简化为 1.0 作为基准)
-        # 或者更严格：计算 Anchor 本身与 Query 的相似度作为基准
-
-        next_batch_ids = []
-        # 记录每个父ID对应的基准分数和来源锚点
-        # Map: parent_id -> (child_score, anchor_text)
-        candidates_map = {}
-
-        # --- 初始化：从 Anchors 获取第一层 Parent ---
         for doc in anchors:
-            parent_id = doc.metadata.get("parent_id")
-            if parent_id and parent_id not in existing_pks:
-                # 计算当前 Anchor 的相似度作为基准 Sim_child
-                # 如果没有向量，暂时用 1.0，但在严格模式下应该计算
-                sim_child = 1.0
-                if "summary_vector" in doc.metadata and doc.metadata["summary_vector"]:
-                    sim_child = self._cosine_sim(query_vec, doc.metadata["vector"])
+            pk = doc.metadata.get("pk")
+            title = doc.metadata.get("title")
+            parts = title.split('_')    # 分割标题
 
-                # 如果多个子节点指向同一个父节点，取分数最高的那个路径
-                if parent_id not in candidates_map or sim_child > candidates_map[parent_id][0]:
-                    candidates_map[parent_id] = (sim_child, doc.page_content[:50])
-                    next_batch_ids.append(parent_id)
+            if not pk or not title or len(parts) <= 1:
+                continue  # 没有父节点（已经是根或无结构）
 
-        # --- 递归循环 ---
-        # 设置最大深度防止死循环，例如 5 层
-        depth = 0
-        while next_batch_ids and depth < 5:
-            depth += 1
-            # 1. 批量拉取父文档 (包含 summary_vector)
-            fetched_docs = self._batch_fetch(next_batch_ids)
+            ancestor_ids = []
+            # 从长到短切分，确保顺序是：直接父节点 -> ... -> 根节点。indices: len-1, len-2, ... 1
+            for i in range(len(parts) - 1, 0, -1):
+                parent_title_str = "_".join(parts[:i])
+                parent_id = generate_node_id(parent_title_str)
+                ancestor_ids.append(parent_id)
 
-            current_generation_ids = []
+            lineage_map[pk] = ancestor_ids
+            all_ancestor_pks.update(ancestor_ids)
 
-            for doc in fetched_docs:
-                pk = doc.metadata.get("pk")
+        if not all_ancestor_pks:
+            return []
 
-                # 获取该文档的 "子节点分数" 和 "来源"
-                child_score, source_text = candidates_map.get(pk, (0.0, ""))
+        # 2. 批量拉取所有祖先文档 (1次 IO)
+        # 过滤掉已经是 Anchor 自身的文档 (理论上 generate_node_id 不会冲突，但为了安全)
+        fetch_list = list(all_ancestor_pks - existing_pks)
+        fetched_docs = self._batch_fetch(fetch_list)
 
-                # 2. 计算当前父节点的相似度 Sim_j (使用 summary_vector)
-                summary_vec = doc.metadata.get("summary_vector")
-                if not summary_vec:
-                    continue  # 没有向量无法计算，跳过
+        # 建立速查表: pk -> Document
+        doc_lookup = {d.metadata.get("pk"): d for d in fetched_docs}
 
+        # 3. 内存中执行语义衰减检查
+        expanded_docs = []
+        for anchor in anchors:
+            anchor_pk = anchor.metadata.get("pk")
+            ancestors = lineage_map.get(anchor_pk, [])  # 已按 parent -> root 排序
+
+            # 获取 Anchor 自身相似度作为基准
+            summary_vec = anchor.metadata.get("summary_vector")
+            child_sim = self._cosine_sim(query_vec, summary_vec) if summary_vec else 0.5
+
+            # 当前这一代的“子节点”分数，初始为 Anchor 的分数
+            current_child_score = child_sim
+            current_child_text = anchor.metadata.get("title", anchor.page_content[:50])
+
+            for ancestor_pk in ancestors:
+                parent_doc = doc_lookup.get(ancestor_pk)
+
+                # 检查文档是否存在并且摘要向量是否存在，同时赋值给 summary_vec
+                if not parent_doc or not (summary_vec := parent_doc.metadata.get("summary_vector")):
+                    continue
+
+                # 计算相似度与判断阈值: Parent 必须达到 Child * Threshold
                 sim_j = self._cosine_sim(query_vec, summary_vec)
-
-                # 3. 阈值判断逻辑
-                # 规则: Sim_j >= Sim_child * Threshold
-                # 同时也必须满足绝对底线 min_sim
-                required_score = child_score * self.decay_threshold
+                required_score = current_child_score * self.decay_threshold
 
                 if sim_j >= required_score and sim_j > self.min_sim:
-                    # --> 接受该父节点
-                    doc.metadata["expansion_type"] = "parent"
-                    doc.metadata["expansion_source"] = f"Parent of anchor: '{source_text}...'"
-                    doc.metadata["expansion_score"] = float(sim_j)
+                    if ancestor_pk not in existing_pks:     # 达标：加入结果
+                        # 注入 Metadata
+                        parent_doc.metadata["expansion_type"] = "parent"
+                        parent_doc.metadata["expansion_source"] = f"Parent of: '{current_child_text}'"
+                        parent_doc.metadata["expansion_score"] = float(sim_j)
 
-                    # 加入结果集
-                    if pk not in existing_pks:
-                        existing_pks.add(pk)
-                        expanded_docs.append(doc)
+                        existing_pks.add(ancestor_pk)
+                        expanded_docs.append(parent_doc)
 
-                        # 4. 准备下一轮递归：获取该节点的 parent
-                        grand_parent_id = doc.metadata.get("parent_id")
-                        if grand_parent_id and grand_parent_id not in existing_pks:
-                            # 记录当前节点的分数，作为下一级的 "child_score"
-                            if grand_parent_id not in candidates_map or sim_j > candidates_map[grand_parent_id][0]:
-                                candidates_map[grand_parent_id] = (sim_j, source_text)
-                                current_generation_ids.append(grand_parent_id)
-
-            # 更新下一轮 ID
-            next_batch_ids = current_generation_ids
+                    # 更新状态，准备判断下一级 (GrandParent)
+                    current_child_score = sim_j
+                    current_child_text = parent_doc.metadata.get("title", "parent_node")
+                else:
+                    # 衰减阻断：如果这一级父节点不相关，不再继续向上追溯根节点，避免把无关的全局 Root 拉进来
+                    break
 
         return expanded_docs
 
@@ -250,7 +250,7 @@ class GraphTraverser:
             return documents
 
         except Exception as e:
-            logger.error(f"Milvus batch fetch failed: {e}")
+            self.logger.error(f"Milvus batch fetch failed: {e}")
             return []
 
     @staticmethod
