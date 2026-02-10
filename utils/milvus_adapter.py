@@ -122,6 +122,24 @@ def decode_hit_to_document(hit: Hit, content_field: str = "text") -> Document:
 
     return doc
 
+def decode_query_result_to_document(
+    row: dict,
+    content_field: str = "text"
+) -> Document:
+    """
+    将 Milvus collection.query 返回的 dict 转换为 LangChain Document
+    """
+    metadata = {}
+    for k, v in row.items():
+        if k != content_field and k in HYBRID_SEARCH_FIELDS:
+            metadata[k] = v
+
+    final_metadata = decode_metadata_from_milvus(metadata)
+    doc = Document(page_content=row.get(content_field, ""), metadata=final_metadata)
+    setattr(doc, 'id', str(row['pk']))
+
+    return doc
+
 def csr_to_milvus_format(csr_matrix):
     """
     将 Scipy CSR 矩阵高效转换为 Milvus 接受的字典列表格式
