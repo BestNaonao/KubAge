@@ -1,4 +1,6 @@
+import json
 import logging
+import math
 from typing import List, Set, Dict
 
 import numpy as np
@@ -6,6 +8,7 @@ from langchain_core.documents import Document
 from pymilvus import Collection
 
 from utils import generate_node_id
+from utils.milvus_adapter import HYBRID_SEARCH_FIELDS, decode_hit_to_document, decode_query_result_to_document
 
 
 class GraphTraverser:
@@ -22,11 +25,9 @@ class GraphTraverser:
             parent_decay_threshold: float = 0.75,
             absolute_min_similarity: float = 0.2,  # 防止相关性太低
             link_proportion: float = 0.75,
-            max_link_top_k: int = 5
+            max_link_top_k: int = 10
     ):
-        self.collection_name = milvus_collection_name
-        self.alias = milvus_connection_alias
-
+        self.collection = Collection(milvus_collection_name, using=milvus_connection_alias)
         # 阈值配置
         self.decay_threshold = parent_decay_threshold
         self.min_sim = absolute_min_similarity
@@ -46,17 +47,16 @@ class GraphTraverser:
         # 建立已存在 ID 集合，用于去重
         existing_pks = {doc.metadata.get("pk") for doc in anchors if doc.metadata.get("pk")}
 
-        # 1. 父级递归扩展
+        # 1. 父级递归扩展 (基于 Title 面包屑，优先执行以确立上下文 Scope)
         parent_docs = self._expand_parents(anchors, query_vec, existing_pks)
         print(f"   ⬆️  Parent Expansion: Found {len(parent_docs)} docs")
 
-        # 2. 链接拓扑扩展
+        # 2. 链接与兄弟扩展 (基于 Milvus Search，补充关联信息)
         link_docs = self._expand_links(anchors, query_vec, existing_pks)
         print(f"   🔗 Link Expansion: Found {len(link_docs)} docs")
 
         # 3. 合并结果 (此时所有文档已去重且标记了 metadata)
-        # 注意：这里只返回新增的扩展文档，还是返回全部？
-        # 通常 Traverser 返回扩展部分，由调用方合并。但为了方便，这里返回 List[ExpandedDoc]
+        # 通常 Traverser 返回扩展部分，由调用方合并。为了方便，这里返回 List[ExpandedDoc]
         return parent_docs + link_docs
 
     def _expand_parents(self, anchors: List[Document], query_vec: List[float], existing_pks: Set[str]) -> List[Document]:
@@ -94,9 +94,7 @@ class GraphTraverser:
         # 过滤掉已经是 Anchor 自身的文档 (理论上 generate_node_id 不会冲突，但为了安全)
         fetch_list = list(all_ancestor_pks - existing_pks)
         fetched_docs = self._batch_fetch(fetch_list)
-
-        # 建立速查表: pk -> Document
-        doc_lookup = {d.metadata.get("pk"): d for d in fetched_docs}
+        doc_lookup = {d.metadata.get("pk"): d for d in fetched_docs}    # 建立倒查表: pk -> Document
 
         # 3. 内存中执行语义衰减检查
         expanded_docs = []
@@ -105,8 +103,8 @@ class GraphTraverser:
             ancestors = lineage_map.get(anchor_pk, [])  # 已按 parent -> root 排序
 
             # 获取 Anchor 自身相似度作为基准
-            summary_vec = anchor.metadata.get("summary_vector")
-            child_sim = self._cosine_sim(query_vec, summary_vec) if summary_vec else 0.5
+            anchor_summary = anchor.metadata.get("summary_vector")
+            child_sim = self._cosine_sim(query_vec, anchor_summary) if anchor_summary else 0.5
 
             # 当前这一代的“子节点”分数，初始为 Anchor 的分数
             current_child_score = child_sim
@@ -124,8 +122,7 @@ class GraphTraverser:
                 required_score = current_child_score * self.decay_threshold
 
                 if sim_j >= required_score and sim_j > self.min_sim:
-                    if ancestor_pk not in existing_pks:     # 达标：加入结果
-                        # 注入 Metadata
+                    if ancestor_pk not in existing_pks:     # 达标：加入结果，元数据增强
                         parent_doc.metadata["expansion_type"] = "parent"
                         parent_doc.metadata["expansion_source"] = f"Parent of: '{current_child_text}'"
                         parent_doc.metadata["expansion_score"] = float(sim_j)
@@ -137,85 +134,110 @@ class GraphTraverser:
                     current_child_score = sim_j
                     current_child_text = parent_doc.metadata.get("title", "parent_node")
                 else:
-                    # 衰减阻断：如果这一级父节点不相关，不再继续向上追溯根节点，避免把无关的全局 Root 拉进来
-                    break
+                    break   # 衰减阻断：如果这一级父节点不相关，不再继续向上追溯根节点，避免拉入无关 Root
 
         return expanded_docs
 
     def _expand_links(self, anchors: List[Document], query_vec: List[float], existing_pks: Set[str]) -> List[Document]:
         """
-        扩展文档内部的关联链接 (Related Links)
+        扩展文档内部的关联链接 (Related Links)和兄弟节点 (Siblings)
         逻辑：获取所有 Link -> 计算 Sim(Link, Query) -> Top-L 截断
         """
-
-        # 1. 收集所有待选链接 ID
-        # Map: link_pk -> (link_text, source_anchor_text)
-        link_candidates = {}
+        # Map: candidate_pk -> (source_anchor_text, relationship_type)， 用于后续给召回文档打标
+        candidate_map = {}
 
         for doc in anchors:
-            # related_links 是 list of dict: [{'pk':..., 'text':..., 'type':...}]
-            links = doc.metadata.get("related_links", [])
-            if not links:
-                continue
+            source_title = doc.metadata.get("title")
 
-            for link in links:
-                target_pk = link.get("pk")
-                l_type = link.get("type")
-                l_text = link.get("text", "link")
-                # 只处理内部链接且未被收录的
-                if target_pk and l_type == "internal" and target_pk not in existing_pks:
-                    # 如果同一个文档被多次引用，保留任意一个来源即可
-                    link_candidates[target_pk] = (l_text, doc.page_content[:50])
+            # 1. 先处理兄弟节点 (优先级较低，作为 Base)
+            prev_id: str = doc.metadata.get("left_sibling")
+            next_id: str = doc.metadata.get("right_sibling")
 
-        if not link_candidates:
+            if prev_id and prev_id not in existing_pks and prev_id not in candidate_map:
+                candidate_map[prev_id] = (f"Previous of '{source_title}'", "sibling_prev")
+            if next_id and next_id not in existing_pks and next_id not in candidate_map:
+                candidate_map[next_id] = (f"Next of '{source_title}'", "sibling_next")
+
+            # 2. 后处理引用链接 (优先级较高，覆写 or 融合)
+            for link in doc.metadata.get("related_links", []):
+                if isinstance(link, dict):
+                    target_pk: str = link.get("pk")
+                    l_type = link.get("type")
+                    l_text = link.get("text", "link")
+
+                    if target_pk and l_type == "internal" and target_pk not in existing_pks:
+                        # 构造强语义描述
+                        link_desc = f"Linked via '{l_text}' from '{source_title}'"
+
+                        # 逻辑：无论之前是否作为兄弟节点添加过，这里都进行覆盖或增强
+                        # 因为锚点文本 (l_text) 对 Rerank 的价值远大于 "Next step"
+                        if target_pk in candidate_map:
+                            # 【高阶策略】如果已经存在（说明既是兄弟又是引用），可以合并描述
+                            old_desc, old_type = candidate_map[target_pk]
+                            # 例如: "Linked via 'XXX' (also Next step) ..."
+                            if "sibling" in old_type:
+                                merged_desc = f"{link_desc} (also {old_desc})"
+                                candidate_map[target_pk] = (merged_desc, "link_mixed")
+                        else:
+                            # 不存在，直接添加
+                            candidate_map[target_pk] = (link_desc, "link")
+
+        if not candidate_map:
             return []
 
-        # 2. 批量拉取链接文档
-        candidate_pks = list(link_candidates.keys())
-        fetched_docs = self._batch_fetch(candidate_pks)
+        candidate_pks: list[str] = list(candidate_map.keys())
 
-        # 3. 计算相似度并评分
-        scored_candidates = []
-        for doc in fetched_docs:
-            pk = doc.metadata.get("pk")
-            link_text, source_text = link_candidates.get(pk, ("unknown", "unknown"))
+        # 3. 动态计算 Top-L
+        # P: 数据驱动的目标数量 (候选总数的一定比例)
+        # A. base_floor: 基础保底数量 (1 + 锚点数)，保证每个锚点至少有一个扩展机会
+        # K. max_link_top_k: 系统硬性上限，防止 Context 爆炸
 
-            summary_vec = doc.metadata.get("summary_vector")
-            if not summary_vec:
-                continue
+        limit_by_prop = math.ceil(len(candidate_pks) * self.link_proportion)
+        base_floor = 1 + len(anchors)
+        top_l = min(self.max_link_top_k, max(base_floor, limit_by_prop))
 
-            score = self._cosine_sim(query_vec, summary_vec)
+        # 4. 使用 Milvus 进行高效过滤和排序
+        # 注意：这里我们使用 summary_vector 进行相似度计算（通常更轻量且代表性强）
+        # 如果 collection 中 vector 是全文向量，summary_vector 是摘要向量，
+        # 在做“链接推荐”时，用 Query 匹配 Link 的 Summary 可能比匹配 Full Text 更准。
 
-            # 记录必要信息以便排序
-            scored_candidates.append({
-                "doc": doc,
-                "score": score,
-                "link_text": link_text,
-                "source_text": source_text
-            })
+        try:
+            # 构造 expr: pk in ["a", "b", ...]。注意 Milvus expr 对 list 长度有限制 (通常 < 16384)，这里通常不会超
+            expr = f"pk in {json.dumps(candidate_pks)}"
+            search_params = {"metric_type": "COSINE", "params": {"nprobe": 10}}
 
-        # 4. 动态计算 Top-L
-        # max(1, min(5, ceil(len * proportion)))
-        import math
-        total_candidates = len(scored_candidates)
-        top_l = max(1, min(self.max_link_top_k, math.ceil(total_candidates * self.link_proportion)))
+            # 执行 Search
+            res = self.collection.search(
+                data=[query_vec],
+                anns_field="summary_vector",
+                param=search_params,
+                limit=top_l,
+                expr=expr,
+                output_fields=HYBRID_SEARCH_FIELDS,
+            )
 
-        # 5. 排序截断
-        scored_candidates.sort(key=lambda x: x["score"], reverse=True)
-        selected_items = scored_candidates[:top_l]
+            final_docs = []
+            # 5. 解析结果
+            for hits in res:
+                for hit in hits:
+                    decoded_doc = decode_hit_to_document(hit, content_field="text")
+                    pk = decoded_doc.metadata.get("pk")
+                    # 恢复来源上下文
+                    source_desc, expansion_type = candidate_map.get(pk, ("Unknown link", "link"))
+                    # 注入扩展元数据
+                    decoded_doc.metadata["expansion_type"] = expansion_type
+                    decoded_doc.metadata["expansion_source"] = source_desc
+                    decoded_doc.metadata["expansion_score"] = hit.score  # Milvus 返回的相似度
 
-        final_docs = []
-        for item in selected_items:
-            doc = item["doc"]
-            # 注入 Metadata
-            doc.metadata["expansion_type"] = "link"
-            doc.metadata["expansion_source"] = f"Linked via '{item['link_text']}' from anchor '{item['source_text']}...'"
-            doc.metadata["expansion_score"] = float(item["score"])
+                    existing_pks.add(pk)
+                    final_docs.append(decoded_doc)
 
-            existing_pks.add(doc.metadata.get("pk"))  # 更新去重集合
-            final_docs.append(doc)
+            return final_docs
 
-        return final_docs
+        except Exception as e:
+            self.logger.error(f"Milvus link expansion search failed: {e}")
+            # Fallback (可选): 如果 search 失败，可以降级回 batch fetch，但通常 search 失败 fetch 也会失败
+            return []
 
     def _batch_fetch(self, pks: List[str]) -> List[Document]:
         """
@@ -225,28 +247,11 @@ class GraphTraverser:
             return []
 
         try:
-            col = Collection(self.collection_name, using=self.alias)
-            # 构造表达式
-            expr = f"pk in {str(pks)}"
-
-            # 需要拉取的字段
-            output_fields = [
-                "pk", "text", "title", "parent_id", "summary_vector",
-                "node_type", "related_links", "source"
-            ]
-
-            res = col.query(expr, output_fields=output_fields)
-
-            # 转换为 Document 对象
+            expr = f"pk in {json.dumps(pks)}"   # 构造表达式
+            res = self.collection.query(expr, output_fields=HYBRID_SEARCH_FIELDS)
             documents = []
-            for hit in res:
-                content = hit.get("text", "")
-                # 移除 vector 字段以节省内存 (除非下一轮需要)
-                # 这里我们需要 summary_vector 计算相似度，保留在 metadata 中
-                meta = {k: v for k, v in hit.items() if k != "text"}
-                doc = Document(page_content=content, metadata=meta)
-                documents.append(doc)
-
+            for row in res:
+                documents.append(decode_query_result_to_document(row, content_field="text"))
             return documents
 
         except Exception as e:
@@ -255,16 +260,11 @@ class GraphTraverser:
 
     @staticmethod
     def _cosine_sim(vec_a: List[float], vec_b: List[float]) -> float:
-        """
-        计算余弦相似度
-        """
-        # 转换为 numpy 数组
+        # 计算余弦相似度
         a = np.array(vec_a)
         b = np.array(vec_b)
         norm_a = np.linalg.norm(a)
         norm_b = np.linalg.norm(b)
-
         if norm_a == 0 or norm_b == 0:
             return 0.0
-
         return float(np.dot(a, b) / (norm_a * norm_b))
