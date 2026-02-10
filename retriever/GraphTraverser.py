@@ -123,9 +123,8 @@ class GraphTraverser:
 
                 if sim_j >= required_score and sim_j > self.min_sim:
                     if ancestor_pk not in existing_pks:     # 达标：加入结果，元数据增强
-                        parent_doc.metadata["expansion_type"] = "parent"
-                        parent_doc.metadata["expansion_source"] = f"Parent of: '{current_child_text}'"
-                        parent_doc.metadata["expansion_score"] = float(sim_j)
+                        parent_doc.metadata["source_type"] = "parent"
+                        parent_doc.metadata["source_desc"] = f"Parent of: '{current_child_text}'"
 
                         existing_pks.add(ancestor_pk)
                         expanded_docs.append(parent_doc)
@@ -143,7 +142,7 @@ class GraphTraverser:
         扩展文档内部的关联链接 (Related Links)和兄弟节点 (Siblings)
         逻辑：获取所有 Link -> 计算 Sim(Link, Query) -> Top-L 截断
         """
-        # Map: candidate_pk -> (source_anchor_text, relationship_type)， 用于后续给召回文档打标
+        # Map: candidate_pk -> (source_anchor_text, relationship_type)，用于后续给召回文档打标
         candidate_map = {}
 
         for doc in anchors:
@@ -154,9 +153,9 @@ class GraphTraverser:
             next_id: str = doc.metadata.get("right_sibling")
 
             if prev_id and prev_id not in existing_pks and prev_id not in candidate_map:
-                candidate_map[prev_id] = (f"Previous of '{source_title}'", "sibling_prev")
+                candidate_map[prev_id] = (f"Previous of '{source_title}'", "sibling")
             if next_id and next_id not in existing_pks and next_id not in candidate_map:
-                candidate_map[next_id] = (f"Next of '{source_title}'", "sibling_next")
+                candidate_map[next_id] = (f"Next of '{source_title}'", "sibling")
 
             # 2. 后处理引用链接 (优先级较高，覆写 or 融合)
             for link in doc.metadata.get("related_links", []):
@@ -177,10 +176,9 @@ class GraphTraverser:
                             # 例如: "Linked via 'XXX' (also Next step) ..."
                             if "sibling" in old_type:
                                 merged_desc = f"{link_desc} (also {old_desc})"
-                                candidate_map[target_pk] = (merged_desc, "link_mixed")
+                                candidate_map[target_pk] = (merged_desc, "link")
                         else:
-                            # 不存在，直接添加
-                            candidate_map[target_pk] = (link_desc, "link")
+                            candidate_map[target_pk] = (link_desc, "link")  # 未检索，直接添加
 
         if not candidate_map:
             return []
@@ -223,11 +221,10 @@ class GraphTraverser:
                     decoded_doc = decode_hit_to_document(hit, content_field="text")
                     pk = decoded_doc.metadata.get("pk")
                     # 恢复来源上下文
-                    source_desc, expansion_type = candidate_map.get(pk, ("Unknown link", "link"))
+                    source_desc, source_type = candidate_map.get(pk, ("Unknown link", "link"))
                     # 注入扩展元数据
-                    decoded_doc.metadata["expansion_type"] = expansion_type
-                    decoded_doc.metadata["expansion_source"] = source_desc
-                    decoded_doc.metadata["expansion_score"] = hit.score  # Milvus 返回的相似度
+                    decoded_doc.metadata["source_type"] = source_type
+                    decoded_doc.metadata["source_desc"] = source_desc
 
                     existing_pks.add(pk)
                     final_docs.append(decoded_doc)
@@ -249,9 +246,11 @@ class GraphTraverser:
         try:
             expr = f"pk in {json.dumps(pks)}"   # 构造表达式
             res = self.collection.query(expr, output_fields=HYBRID_SEARCH_FIELDS)
+
             documents = []
             for row in res:
                 documents.append(decode_query_result_to_document(row, content_field="text"))
+
             return documents
 
         except Exception as e:
@@ -260,11 +259,12 @@ class GraphTraverser:
 
     @staticmethod
     def _cosine_sim(vec_a: List[float], vec_b: List[float]) -> float:
-        # 计算余弦相似度
+        """计算余弦相似度"""
         a = np.array(vec_a)
         b = np.array(vec_b)
         norm_a = np.linalg.norm(a)
         norm_b = np.linalg.norm(b)
+
         if norm_a == 0 or norm_b == 0:
             return 0.0
         return float(np.dot(a, b) / (norm_a * norm_b))
