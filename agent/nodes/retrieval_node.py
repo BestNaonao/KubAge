@@ -1,33 +1,72 @@
-import uuid
-from typing import List, Dict, Any
+import logging
+from typing import List, Dict, Any, TypedDict, Optional
 
-from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 
 from agent.nodes import RerankNode
 from agent.schemas import ExecutionPlan
 from agent.state import AgentState
-from retriever.MilvusHybridRetriever import MilvusHybridRetriever
+from retriever import MilvusHybridRetriever, GraphTraverser
+from utils import csr_to_milvus_format
 
+
+class VectorSchema(TypedDict):
+    dense: Optional[List[float]]
+    sparse: Optional[Dict[int, float]]
 
 class RetrievalNode:
-    """检索节点，合并了RerankNode，包含了粗筛（Retrieve）和精筛（Rerank）"""
-    def __init__(self, retriever: MilvusHybridRetriever, reranker: RerankNode):
+    """
+    检索节点，批处理向量嵌入，分三阶段检索：粗筛（Retrieval）、扩展（Expansion）和精筛（Rerank）
+    """
+    logger = logging.getLogger(__name__)
+
+    def __init__(self, retriever: MilvusHybridRetriever, traverser: GraphTraverser, reranker: RerankNode):
         """
         初始化检索节点
-        :param retriever: 已经初始化好的 MilvusHybridRetriever 实例
+        :param retriever: 已初始化的 MilvusHybridRetriever (持有 embedding models)
+        :param traverser: 已初始化的 GraphTraverser (只负责拓扑计算)
+        :param reranker: 已初始化的 RerankNode
         """
         self.retriever = retriever
+        self.traverser = traverser
         self.reranker = reranker
+
+    def _batch_embed_queries(self, queries: List[str]) -> Dict[str, VectorSchema]:
+        """
+        Batch embed all queries using models from the retriever.
+        """
+        if not queries:
+            return {}
+
+        # 1. Dense Embeddings (尝试使用 batch 接口)
+        try:
+            dense_vecs = self.retriever.dense_embedding_func.embed_documents(queries)
+        except AttributeError:  # 回退到循环
+            dense_vecs = [self.retriever.dense_embedding_func.embed_query(q) for q in queries]
+
+        # 2. Sparse Embeddings (适配 BGE-M3)
+        try:
+            # 假设 sparse_embedding_func 是 BGE-M3 wrapper，具有 encode_queries
+            sparse_result = self.retriever.sparse_embedding_func.encode_queries(queries)["sparse"]
+            sparse_vecs = csr_to_milvus_format(sparse_result)
+
+        except Exception as e:
+            self.logger.error(f"Batch sparse embedding failed: {e}")
+            raise e
+
+        # 3. Construct Cache
+        cache = {}
+        for i, query in enumerate(queries):
+            cache[query] = {"dense": dense_vecs[i], "sparse": sparse_vecs[i],}
+
+        return cache
 
     def __call__(self, state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
         """
         执行检索逻辑
         """
-        # 1. 获取上一个节点的分析结果
+        # 1. 获取上一个节点的分析结果，并安全检查
         plan: ExecutionPlan = state.get("plan")
-
-        # 安全检查：如果没有分析结果或没有生成搜索查询，直接返回空
         if not plan or not plan.search_queries:
             print("❌ No search queries found in state.")
             return {"retrieved_docs": [], "error": "No queries in plan"}
@@ -36,34 +75,57 @@ class RetrievalNode:
         current_attempts = state.get("retrieval_attempts", 0)
         print(f"   🔄 Retrieval Attempts: {current_attempts + 1}")
 
-        all_retrieved_docs = []
+        # 批量 Embedding，生成上下文缓存
+        queries = plan.search_queries
+        print(f"🔍 Processing {len(queries)} queries...")
+        embedding_cache = self._batch_embed_queries(queries)
 
-        # 2. 遍历所有 Query 进行检索
+        all_candidates = []
+        seen_pks = set()
+
+        # 2. 遍历每个 Query (Retrieval + Expansion)
         for query in plan.search_queries:
+            vectors = embedding_cache.get(query)
             try:
                 # 调用 MilvusHybridRetriever
-                # 注意：retriever.invoke 是 LangChain 标准接口，底层会调用 _get_relevant_documents
-                docs = self.retriever.invoke(query)
-                all_retrieved_docs.extend(docs)
-                print(f"   Query: '{query}' -> Found {len(docs)} docs")
+                # A. Hybrid Search (获取 Anchors)
+                anchors = self.retriever.search_with_vectors(
+                    dense_vec=vectors['dense'],
+                    sparse_vec=vectors['sparse'],
+                )
+                # 标记来源
+                for doc in anchors:
+                    doc.metadata['retrieval_source'] = 'anchor'
+                    doc.metadata['retrieval_query'] = query
+
+                # B. Graph Expansion (传入 Dense Vector 即可)
+                expanded_docs = self.traverser.expand(anchors, vectors['dense'])
+
+                # C. 收集并初步去重
+                current_batch = anchors + expanded_docs
+                print(f"   Query: '{query}' -> Found {len(current_batch)} docs")
+                for doc in current_batch:
+                    pk = doc.metadata.get("pk")
+                    # 全局去重 (跨 Query 去重)
+                    if pk and pk not in seen_pks:
+                        seen_pks.add(pk)
+                        all_candidates.append(doc)
+
             except Exception as e:
                 print(f"❌ Error retrieving for query '{query}': {e}")
-                # 单个 query 失败不应阻断整个流程
-                continue
+                continue    # 单个 query 失败不应阻断整个流程
 
-        # 3. 文档去重 (Deduplication)
-        # 不同的 query 可能会召回相同的文档片段，需要基于 pk 去重
-        unique_docs = self._deduplicate(all_retrieved_docs)
+        print(f"∑ Total unique candidates after expansion: {len(all_candidates)}")
 
-        # 4. 更新状态用于 Rerank 子节点
+        # 3. Rerank 阶段
         # Rerank 需要知道 retrieved_docs、technical summary、last_message
         state_for_rerank = {
-            "retrieved_docs": unique_docs,
+            "retrieved_docs": all_candidates,
             "analysis": state.get("analysis"),
             "message": state.get("messages")
         }
 
-        # 3. 调用 Rerank 逻辑 (假设 RerankNode 已经是一个 callable)
+        # 调用 Rerank (假设 RerankNode 已经是一个 callable)
         # 这里为了简单，假设我们可以直接复用 reranker 实例的方法
         # 或者在这里直接实例化 RerankNode 并调用
         reranked_result = self.reranker(state_for_rerank, config=config)
@@ -76,27 +138,3 @@ class RetrievalNode:
             "tool_output": None,
             "retrieval_attempts": current_attempts + 1
         }  # 清空之前的工具输出
-
-    @staticmethod
-    def _deduplicate(documents: List[Document]) -> List[Document]:
-        """
-        基于文档的 metadata['pk'] 进行去重
-        如果 pk 不存在，则回退到使用 page_content 的哈希值
-        """
-        unique_docs = []
-        seen_ids = set()
-
-        for doc in documents:
-            # 优先使用数据库主键 pk
-            doc_id = doc.metadata.get("pk", "")
-
-            # 如果 retrieve 的时候没有拉取 pk，则使用内容的哈希兜底
-            if not doc_id:
-                title = doc.metadata.get("title")
-                doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, title))
-
-            if doc_id not in seen_ids:
-                seen_ids.add(doc_id)
-                unique_docs.append(doc)
-
-        return unique_docs
