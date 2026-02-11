@@ -57,9 +57,9 @@ class RetrievalNode:
             raise e
 
         # 3. Construct Cache
-        cache = {}
+        cache: Dict[str, VectorSchema] = {}
         for i, query in enumerate(queries):
-            cache[query] = {"dense": dense_vecs[i], "sparse": sparse_vecs[i],}
+            cache[query]: VectorSchema = {"dense": dense_vecs[i], "sparse": sparse_vecs[i],}
 
         return cache
 
@@ -96,8 +96,8 @@ class RetrievalNode:
                 # 调用 MilvusHybridRetriever
                 # A. Hybrid Search (获取 Anchors)
                 anchors = self.retriever.search_with_vectors(
-                    dense_vec=vectors['dense'],
-                    sparse_vec=vectors['sparse'],
+                    dense_vec=vectors["dense"],
+                    sparse_vec=vectors["sparse"],
                 )
                 # 标记来源
                 for doc in anchors:
