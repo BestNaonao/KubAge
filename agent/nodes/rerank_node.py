@@ -8,9 +8,24 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from agent.schemas import OperationType
 
-RERANK_SYSTEM_PROMPT = """Determine whether the given Kubernetes documentation fragment contains authoritative and actionable information that can directly help answer or resolve the technical question described in the Query.
-Answer "yes" only if the Document provides concrete concepts, command references, configuration details, API semantics, or troubleshooting guidance that is directly useful for the Query.
-Answer "no" if the Document only provides high-level background, navigation links, unrelated topics, or information that cannot practically support solving the Query."""
+
+RERANK_SYSTEM_PROMPT = """You are performing binary relevance judgment for retrieval reranking.
+Determine whether the given Kubernetes documentation fragment contains authoritative and actionable information that can directly help answer or resolve the technical question described in the Query.
+
+The Document may include a "[Retrieval Context]" label indicating how it was retrieved:
+- Anchor/Direct-Hit: Judge direct topical and semantic relevance to the query.
+- Parent/Context: Judge whether it provides necessary definitions, scope, or prerequisites for the query topic.
+- Link/Sibling: Judge whether it offers essential troubleshooting steps or related configuration details missed by the Direct Hit.
+
+Answer "yes" only if:
+- The document provides concrete concepts, command references, configuration details, API semantics, or troubleshooting guidance or necessary context.
+- The document meaningfully reduces uncertainty in solving the Query.
+
+Answer "no" if:
+- The Document is irrelevant or too generic even considering its retrieval context.
+- The document does not independently contribute practical value to resolving the Query.
+
+You must answer with exactly one word: yes or no."""
 
 
 class RerankNode:
@@ -50,7 +65,6 @@ class RerankNode:
 
         # 针对不同操作类型定制关注点
         self.base_instruct = "Given a technical query about Kubernetes, retrieve relevant documentation passages that provide answers or context."
-
         self.op_prompt_map = {
             # 诊断场景：关注错误原因、排查步骤、命令输出解释、日志分析
             OperationType.DIAGNOSIS: (
@@ -113,8 +127,15 @@ class RerankNode:
         title = doc.metadata.get("title", "Untitled Section")
         content = doc.page_content
 
-        # 显式拼接标题，这对 Reranker 极其重要
-        enriched_doc = f"Title: {title}\nContent: {content}"
+        # 显式注入 retrieval_source 信息，如果没有 metadata，给默认值
+        source_type = doc.metadata.get("source_type", "unknown")
+        source_desc = doc.metadata.get("source_desc", "Retrieved via vector search")
+
+        # 构造上下文描述字符串。例如: "[Retrieval Context]: Type=parent. Info=Parent of: 'Debug Service'"
+        context_str = f"[Retrieval Context]: Type={source_type.upper()}. Info={source_desc}"
+
+        # 拼接增强后的 Document 内容。将 Context 放在 Content 之前，确保模型先看到文档的定位
+        enriched_doc = f"[Title]: {title}\n{context_str}\n[Content]: {content}"
 
         return f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {enriched_doc}"
 
@@ -267,7 +288,7 @@ class RerankNode:
             for doc, score in doc_score_pairs[:self.top_n]:
                 doc.metadata["rerank_score"] = float(score)
                 reranked_docs.append(doc)
-                print(f"   Score: {score:.4f} | Title: {doc.metadata.get('title', 'unknown')}")
+                print(f"   [{doc.metadata.get('source_type', 'UNK')}] Score: {score:.4f} | Title: {doc.metadata.get('title')}")
 
             return {"retrieved_docs": reranked_docs}
 
