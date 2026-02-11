@@ -1,6 +1,7 @@
 import logging
 from typing import List, Dict, Any, TypedDict, Optional
 
+from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 
 from agent.nodes import RerankNode
@@ -19,6 +20,7 @@ class RetrievalNode:
     检索节点，批处理向量嵌入，分三阶段检索：粗筛（Retrieval）、扩展（Expansion）和精筛（Rerank）
     """
     logger = logging.getLogger(__name__)
+    priority_map = {'anchor': 3, 'parent': 2, 'link': 1,  'sibling': 1}     # 文档来源的优先级
 
     def __init__(self, retriever: MilvusHybridRetriever, traverser: GraphTraverser, reranker: RerankNode):
         """
@@ -61,6 +63,9 @@ class RetrievalNode:
 
         return cache
 
+    def _get_source_priority(self, document: Document) -> int:
+        return self.priority_map.get(document.metadata.get("source_type", "unknown"), 0)
+
     def __call__(self, state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
         """
         执行检索逻辑
@@ -80,8 +85,9 @@ class RetrievalNode:
         print(f"🔍 Processing {len(queries)} queries...")
         embedding_cache = self._batch_embed_queries(queries)
 
-        all_candidates = []
-        seen_pks = set()
+        # 使用 Dict[pk, Document] 代替 List 进行去重和管理
+        # 键是 PK，值是 Document 对象
+        candidate_buffer: Dict[str, Document] = {}
 
         # 2. 遍历每个 Query (Retrieval + Expansion)
         for query in plan.search_queries:
@@ -95,27 +101,38 @@ class RetrievalNode:
                 )
                 # 标记来源
                 for doc in anchors:
-                    doc.metadata['retrieval_source'] = 'anchor'
-                    doc.metadata['retrieval_query'] = query
+                    doc.metadata["source_type"] = "anchor"
+                    doc.metadata["source_desc"] = f"Direct hit by query: '{query}'"
 
                 # B. Graph Expansion (传入 Dense Vector 即可)
                 expanded_docs = self.traverser.expand(anchors, vectors['dense'])
-
-                # C. 收集并初步去重
                 current_batch = anchors + expanded_docs
-                print(f"   Query: '{query}' -> Found {len(current_batch)} docs")
+                print(f"   Query: '{query}' -> Found {len(current_batch)} docs "
+                      f"(Anchors: {len(anchors)}, Expanded: {len(expanded_docs)})")
+
+                # C. 基于优先级的 Upsert (合并到 Buffer)
                 for doc in current_batch:
-                    pk = doc.metadata.get("pk")
-                    # 全局去重 (跨 Query 去重)
-                    if pk and pk not in seen_pks:
-                        seen_pks.add(pk)
-                        all_candidates.append(doc)
+                    if not (pk := doc.metadata.get("pk")):
+                        continue
+
+                    if pk not in candidate_buffer:
+                        candidate_buffer[pk] = doc  # 新文档，直接加入
+                    else:
+                        # 已存在的文档，检查优先级
+                        # 优先级更高，覆盖旧文档，保留更重要的 source_desc
+                        # 相同优先级默认保留第一个，通常第一个 Query 在 Planner 中更重要。
+                        old_prio = self._get_source_priority(candidate_buffer[pk])
+                        new_prio = self._get_source_priority(doc)
+                        if new_prio > old_prio:
+                            candidate_buffer[pk] = doc
 
             except Exception as e:
                 print(f"❌ Error retrieving for query '{query}': {e}")
                 continue    # 单个 query 失败不应阻断整个流程
 
-        print(f"∑ Total unique candidates after expansion: {len(all_candidates)}")
+        # 将 Buffer 转回 List
+        all_candidates = list(candidate_buffer.values())
+        print(f"∑ Total unique candidates after merging: {len(all_candidates)}")
 
         # 3. Rerank 阶段
         # Rerank 需要知道 retrieved_docs、technical summary、last_message
