@@ -9,25 +9,23 @@ from agent.schemas import ProblemAnalysis, ExecutionPlan, SelfEvaluation
 
 
 class AgentState(TypedDict):
-    # --- 基础对话历史 ---
+    # --- 基础记忆 ---
     messages: Annotated[List[BaseMessage], operator.add]
+    # 存储自然语言反思摘要(Self-Reflection)，作为"语义梯度"
+    reflections: Annotated[List[str], operator.add]
 
-    # --- 节点中间产物 ---
-    # 1. 分析结果
+    # --- 认知快照 (Cognitive Snapshot) ---
     analysis: Optional[ProblemAnalysis]
-
-    # 2. 当前计划 (每次Planning覆盖)
     plan: Optional[ExecutionPlan]
+    evaluation: Optional[SelfEvaluation]
 
-    # 3. 执行结果
-    # 检索到的文档 (Retrieval Node 更新)
+    # --- 执行上下文 (Execution Context) ---
     retrieved_docs: Optional[List[Document]]
-    retrieval_attempts: int
-    # 工具输出结果 (ToolCall Node 更新)
     tool_output: Optional[str]
 
-    # 4. 评估结果 (Self-Regulation Node 更新)
-    evaluation: Optional[SelfEvaluation]
+    # --- 控制元数据 (Control Metadata) ---
+    retrieval_attempts: int
+    tool_use_attempts: int
 
     # --- 辅助信息 ---
     error: Optional[str]
