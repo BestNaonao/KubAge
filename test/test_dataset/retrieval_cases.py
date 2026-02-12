@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import Dict, Any, Callable, Optional, List
+from typing import Callable, Optional, List
+
 from langchain_core.documents import Document
 
 from agent.schemas import ProblemAnalysis, OperationType, RiskLevel, NamedEntity

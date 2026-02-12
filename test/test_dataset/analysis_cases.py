@@ -50,7 +50,7 @@ def case_delete_nginx(result):
     """验证: 删除/重启高风险操作 (Ambiguity + High Risk)"""
     _assert_entity(result, "nginx-frontend")
     _assert_op(result, [OperationType.RESOURCE_DELETION, OperationType.RESTART])
-    # 必须是高危
+    # 必须判断是高危操作
     _assert_risk(result, [RiskLevel.HIGH, RiskLevel.CRITICAL])
 
 def case_scaling_api(result):

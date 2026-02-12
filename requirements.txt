@@ -21,3 +21,5 @@ python-docx~=1.1.2
 langgraph~=1.0.5
 mcp~=1.25.0
 psycopg~=3.3.2
+dataclasses~=0.8
+kubernetes~=35.0.0
