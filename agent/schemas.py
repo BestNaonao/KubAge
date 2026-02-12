@@ -118,7 +118,11 @@ class SelfEvaluation(BaseModel):
     reasoning: str = Field(description="评估理由")
     status: EvaluatedStatus = Field(description="当前步骤执行结果的评估状态")
     next_step: NextStep = Field(description="决定回退到哪一步或继续前进")
-    feedback: str = Field(description="反馈给下一步骤的改进建议或错误信息")
+    feedback: str = Field(description="反馈给下一步骤的具体操作建议（指令性）")
+    reflection: Optional[str] = Field(
+        default=None,
+        description="当 status 为 Fail 或 Needs Refinement 时必填。深刻反思失败原因（如参数错误、关键词偏差），并以'下次应该...'的句式总结经验。如果 Pass 则为 None。"
+    )
 
 def analysis_view(analysis: ProblemAnalysis) -> str:
     """问题分析的视图"""
