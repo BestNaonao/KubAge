@@ -24,6 +24,14 @@ SYSTEM_EVALUATE_PROMPT = """你是 Kubernetes 智能运维系统中的【执行�
 {to_planning_logic}
    - **TO_EXPRESSION**:
 {to_expression_logic}
+
+### 反思机制 (Self-Reflection)
+当评估结果为 **Fail** 或 **Needs_Refinement** 时，你必须触发**反思模式**：
+1. **分析原因**: 是工具参数错了？还是检索关键词太生僻或检索方向错误？
+2. **生成反思 (Reflection)**: 用自然语言总结一条通用的经验教训。
+   - 错误示例: "参数填错了。"
+   - 正确示例: "Kubernetes Deployment 的 replicas 字段位于 spec 下，而不是根目录，下次生成 YAML 时应该注意层级。"
+
 ### 输出格式
 严格遵守 JSON 格式:
 {format_instructions}
@@ -174,5 +182,8 @@ class RegulationNode:
         print(f"   Decision: {evaluation.status} -> Next: {evaluation.next_step}")
         print(f"   Reason: {evaluation.reasoning}")
         print(f"   Feedback: {evaluation.feedback}")
+        if evaluation.reflection:
+            print(f"   🧠 New Reflection: {evaluation.reflection}")
+            updates["reflections"] = [evaluation.reflection]    # 追加到 state["reflections"]
 
         return updates
