@@ -1,7 +1,8 @@
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables import RunnableConfig
 
-from agent.prompts import format_docs
+from agent.prompts import format_docs, format_reflections
 from agent.schemas import ExecutionPlan, SelfEvaluation, PlanAction, RiskLevel, ProblemAnalysis, OperationType, \
     EvaluatedStatus, analysis_view, evaluation_view, plan_view
 from agent.state import AgentState
@@ -103,11 +104,15 @@ USER_PLANNING_PROMPT = """
 
 ### 步骤反馈:
 {feedback}
+
+### 历史反思:
+{reflections}
 """
 
 
 class PlanningNode:
     MAX_RETRIEVAL_ATTEMPTS = 3
+    MAX_TOOL_USE_ATTEMPTS = 3
 
     def __init__(self, llm, tool_descriptions: str):
         self.llm = llm
@@ -197,6 +202,7 @@ class PlanningNode:
         生成简短的指导语，作为 USER_PROMPT 的一部分
         """
         retrieval_attempts = state.get("retrieval_attempts", 0)
+        tool_use_attempts = state.get("tool_use_attempts", 0)
         guidance = []
 
         # --- 1. 检索次数熔断机制(最高优先级) ---
@@ -209,21 +215,33 @@ class PlanningNode:
                 "   - 策略 C: 基于现有信息给出“无法找到确切文档”的保守回答。"
             )
 
+        if tool_use_attempts >= self.MAX_TOOL_USE_ATTEMPTS:
+            guidance.append(
+                f"  **警告——执行异常**: 连续工具调用失败 {tool_use_attempts} 次。\n"
+                "   - **必须停止尝试当前工具**\n"
+                "   - 策略 A: 选择 `Direct_Answer` 向用户报告失败并寻求人工介入。\n"
+                "   - 策略 B: 选择 `Retrieve` 在知识库中检索相关排障手册。"
+            )
+
         return "\n".join(guidance) if guidance else "  无特殊约束，按常规流程规划"
 
-    def __call__(self, state: AgentState):
+    def __call__(self, state: AgentState, config: RunnableConfig):
         print("\n🧠 [Planning]: Thinking...")
         messages = state.get("messages")
+        reflections = state.get("reflections", [])
         analysis = state.get("analysis")
-        documents = state.get("retrieved_docs")
         plan = state.get("plan")
         evaluation: SelfEvaluation = state.get("evaluation")
+        documents = state.get("retrieved_docs")
 
         dynamic_system_instruction = self._generate_dynamic_system_instructions(state)
         dynamic_guidance = self._generate_dynamic_guidance(state)
 
         # for message in messages:
         #     message.pretty_print()  # 临时调试使用
+        if config["metadata"].get("verbose", False):
+            print(f"   🧠 Injecting {len(documents)} documents into context.")
+            print(f"   🧠 Injecting {len(reflections)} reflections into context.")
 
         # 调用链
         try:
@@ -235,6 +253,7 @@ class PlanningNode:
                 "documents": format_docs(documents),
                 "former_plan": plan_view(plan),
                 "feedback": evaluation_view(evaluation),
+                "reflections": format_reflections(reflections),
             })
 
             new_plan = ExecutionPlan(**result)

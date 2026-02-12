@@ -46,3 +46,9 @@ def format_docs(docs: List[Document]) -> str:
         current_chars += len(entry)
 
     return "\n\n".join(formatted)
+
+def format_reflections(reflections: list[str]) -> str:
+    if reflections:
+        return "\n".join([f"  {i + 1}. {r}" for i, r in enumerate(reflections)])
+    else:
+        return "None"
