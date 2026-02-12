@@ -146,12 +146,10 @@ class RetrievalNode:
         # 这里为了简单，假设我们可以直接复用 reranker 实例的方法
         # 或者在这里直接实例化 RerankNode 并调用
         reranked_result = self.reranker(state_for_rerank, config=config)
-
         final_docs = reranked_result.get("retrieved_docs", [])
         print(f"   Found {len(final_docs)} relevant docs.")
 
         return {
             "retrieved_docs": final_docs,
             "tool_output": None,
-            "retrieval_attempts": current_attempts + 1
         }  # 清空之前的工具输出

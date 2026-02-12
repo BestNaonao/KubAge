@@ -85,10 +85,7 @@ class RegulationNode:
 
     @staticmethod
     def _generate_dynamic_criteria(action: PlanAction) -> str:
-        if action == PlanAction.RETRIEVE:
-            return RETRIEVE_CRITERIA
-        else:
-            return TOOL_USE_CRITERIA
+        return RETRIEVE_CRITERIA if action == PlanAction.RETRIEVE else TOOL_USE_CRITERIA
 
     @staticmethod
     def _generate_dynamic_decision_logic(operation: OperationType, action: PlanAction) -> tuple[str, str]:
@@ -144,10 +141,26 @@ class RegulationNode:
         evaluation = SelfEvaluation(**eval_result)
         updates = {"evaluation": evaluation}
 
-        # 5. 状态更新逻辑: 检索成功则重置计数器
-        if plan.action == PlanAction.RETRIEVE and evaluation.status == EvaluatedStatus.PASS:
-            print("   ✅ Retrieval Passed (Quality Check OK). Resetting counter.")
-            updates["retrieval_attempts"] = 0
+        # 5. 计数器与重置逻辑
+        # 只有在 Regulation 阶段才更新计数器，因为这里才定性了"这一次尝试是否算数"
+        current_retrieval = state.get("retrieval_attempts", 0)
+        current_tool_use = state.get("tool_use_attempts", 0)
+
+        if plan.action == PlanAction.RETRIEVE:
+            if evaluation.status == EvaluatedStatus.PASS:
+                print("   ✅ Retrieval Passed. Resetting counter.")
+                updates["retrieval_attempts"] = 0
+            else:
+                print(f"   ⚠️ Retrieval Failed/Refine. Attempt {current_retrieval + 1}")
+                updates["retrieval_attempts"] = current_retrieval + 1
+
+        elif plan.action == PlanAction.TOOL_USE:
+            if evaluation.status == EvaluatedStatus.PASS:
+                print("   ✅ Tool Use Passed. Resetting counter.")
+                updates["tool_use_attempts"] = 0
+            else:
+                print(f"   ⚠️ Tool Use Failed. Attempt {current_tool_use + 1}")
+                updates["tool_use_attempts"] = current_tool_use + 1
 
         # 6. 硬规则约束: 非 QA 问题的检索，不允许直接表达
         if (
