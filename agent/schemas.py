@@ -108,8 +108,6 @@ class EvaluatedStatus(Enum):
 class NextStep(str, Enum):
     TO_ANALYSIS = "Analysis"        # 重新分析(意图理解有误)
     TO_PLANNING = "Planning"        # 重新规划(更换工具或检索词)
-    TO_RETRIEVAL = "Retrieval"      # 重新检索(极少直接用)
-    TO_TOOL = "ToolCall"            # 重新调用(极少直接用)
     TO_EXPRESSION = "Expression"    # 回答用户
 
 

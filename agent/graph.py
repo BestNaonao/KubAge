@@ -1,15 +1,15 @@
 from langgraph.graph import StateGraph, START, END
-from agent.state import AgentState
-from agent.schemas import NextStep, PlanAction
 
 # 引入节点
 from agent.nodes.analysis_node import AnalysisNode
-from agent.nodes.planning_node import PlanningNode
-from agent.nodes.retrieval_node import RetrievalNode
-from agent.nodes.tool_node import ToolCallNode
-from agent.nodes.regulation_node import RegulationNode
 from agent.nodes.expression_node import ExpressionNode
-from agent.nodes.sensory_node import SensoryNode  # 假设你有这个节点
+from agent.nodes.planning_node import PlanningNode
+from agent.nodes.regulation_node import RegulationNode
+from agent.nodes.retrieval_node import RetrievalNode
+from agent.nodes.sensory_node import SensoryNode
+from agent.nodes.tool_node import ToolCallNode
+from agent.schemas import NextStep, PlanAction
+from agent.state import AgentState
 
 
 Sensory = "Sensory"
@@ -75,12 +75,19 @@ def build_react_agent(llm, retriever, reranker, tool_descriptions: str, config_p
     workflow.add_edge(ToolCall, Self_Regulation)
 
     def route_regulation(state: AgentState):
+        retrieval_attempts = state.get("retrieval_attempts", 0)
+        tool_use_attempts = state.get("tool_use_attempts", 0)
+
+        # 如果超过最大重试次数，强制结束
+        if retrieval_attempts >= 3 and tool_use_attempts >= 3:
+            print("   🚫 Circuit Breaker Triggered -> To Expression")
+            return Expression
+
         step = state.get("evaluation").next_step
+        if step == NextStep.TO_EXPRESSION: return Expression
         if step == NextStep.TO_ANALYSIS: return Analysis
         if step == NextStep.TO_PLANNING: return Planning
-        if step == NextStep.TO_RETRIEVAL: return Retrieval
-        if step == NextStep.TO_TOOL: return ToolCall
-        return Expression
+        return Planning
 
     workflow.add_conditional_edges(Self_Regulation, route_regulation)
 
