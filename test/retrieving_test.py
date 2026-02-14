@@ -1,8 +1,5 @@
-import torch
-from langchain_huggingface import HuggingFaceEmbeddings
-from pymilvus.model.hybrid import BGEM3EmbeddingFunction
-
 from retriever import MilvusHybridRetriever
+from utils import get_dense_embed_model, get_sparse_embed_model
 from utils.milvus_adapter import connect_milvus_by_env
 
 
@@ -13,17 +10,10 @@ def main():
     # 2. 加载模型 (这里需要加载和 Build 阶段一样的模型)
     # 注意显存控制，如果显存不够，可以把 dense 模型放到 CPU 或者按需加载
     print("Loading Dense Model...")
-    dense_ef = HuggingFaceEmbeddings(
-        model_name="../models/Qwen/Qwen3-Embedding-0.6B",  # 替换你的路径
-        model_kwargs={"device": "cuda" if torch.cuda.is_available() else "cpu"}
-    )
+    dense_ef = get_dense_embed_model("../models/Qwen/Qwen3-Embedding-0.6B")
 
     print("Loading Sparse Model...")
-    sparse_ef = BGEM3EmbeddingFunction(
-        model_name="BAAI/bge-m3",  # 替换你的路径
-        use_fp16=True,
-        device="cuda" if torch.cuda.is_available() else "cpu"
-    )
+    sparse_ef = get_sparse_embed_model("BAAI/bge-m3")
 
     # 3. 初始化 Retriever
     retriever = MilvusHybridRetriever(

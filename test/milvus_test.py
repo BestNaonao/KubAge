@@ -2,10 +2,10 @@ import os
 import random
 
 from dotenv import load_dotenv, find_dotenv
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 from pymilvus import Collection, connections
 
+from utils import get_dense_embed_model
 from utils.rag_utils import get_full_node_content
 
 # ==================== 环境变量加载 ====================
@@ -290,16 +290,7 @@ def graph_traversal_test(milvus: Milvus):
 
 def main():
     embedding_path = "../models/Qwen/Qwen3-Embedding-0.6B"   # 相对路径：从当前脚本所在目录出发
-    embedding_model = HuggingFaceEmbeddings(
-        model_name=embedding_path,
-        model_kwargs={
-            "device": "cuda",  # 如果无 GPU，改为 "cpu"
-            "trust_remote_code": True,  # Qwen 必须开启
-        },
-        encode_kwargs={
-            "normalize_embeddings": True  # Qwen 推荐开启，用于 COSINE 相似度
-        }
-    )
+    embedding_model = get_dense_embed_model(embedding_path)
     # basic_test(embedding_model, "my_collection")
     kb_store = milvus_store(embedding_model, "knowledge_base_v3")
     kb_test(kb_store)

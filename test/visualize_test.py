@@ -2,29 +2,17 @@ import os
 from pathlib import Path
 
 import torch
-from dotenv import find_dotenv, load_dotenv
-from langchain_huggingface import HuggingFaceEmbeddings
 from transformers import AutoTokenizer
 
-from utils import MarkdownTreeParser
+from utils import MarkdownTreeParser, get_dense_embed_model
 from utils.chunker_utils import visualize_document_tree
-
-load_dotenv(find_dotenv())
-MILVUS_HOST = os.getenv('MILVUS_HOST')
-MILVUS_PORT = os.getenv('MILVUS_PORT')
-MILVUS_USER = os.getenv('MILVUS_USER')
-MILVUS_PASSWORD = os.getenv('MILVUS_ROOT_PASSWORD')
 
 RAW_DATA_DIR = "../raw_data"
 
 qwen_path = "../models/Qwen/Qwen3-Embedding-0.6B"
 
 # 1. 初始化嵌入模型
-embeddings = HuggingFaceEmbeddings(
-    model_name=qwen_path,
-    model_kwargs={"device": "cuda", "trust_remote_code": True},
-    encode_kwargs={"normalize_embeddings": True}
-)
+embeddings = get_dense_embed_model(qwen_path)
 
 # 2. 初始化 MarkdownTreeParser
 tokenizer = AutoTokenizer.from_pretrained(qwen_path, trust_remote_code=True)

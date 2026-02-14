@@ -1,12 +1,9 @@
 from typing import List, Dict, Any
 
-import torch
 from langchain_core.runnables import RunnableConfig
 # 引入 Embedding 依赖
-from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.constants import START, END
 from langgraph.graph import StateGraph
-from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
 from agent.nodes.rerank_node import RerankNode
 from agent.nodes.retrieval_node import RetrievalNode
@@ -15,6 +12,7 @@ from agent.schemas import ProblemAnalysis, ExecutionPlan, PlanAction
 from agent.state import AgentState
 from retriever.MilvusHybridRetriever import MilvusHybridRetriever
 from test_dataset.retrieval_cases import ALL_RETRIEVAL_SCENARIOS, RetrievalTestScenario
+from utils import get_dense_embed_model, get_sparse_embed_model
 from utils.milvus_adapter import connect_milvus_by_env
 
 
@@ -66,17 +64,10 @@ def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
     COLLECTION_NAME = "knowledge_base_v2"
 
     # 1. Dense Embedding
-    dense_embedding = HuggingFaceEmbeddings(
-        model_name=DENSE_MODEL_PATH,
-        model_kwargs={"device": "cuda" if torch.cuda.is_available() else "cpu"}
-    )
+    dense_embedding = get_dense_embed_model(DENSE_MODEL_PATH)
 
     # 2. Sparse Embedding
-    sparse_embedding = BGEM3EmbeddingFunction(
-        model_name=SPARSE_MODEL_PATH,
-        use_fp16=True,
-        device="cuda" if torch.cuda.is_available() else "cpu"
-    )
+    sparse_embedding = get_sparse_embed_model(SPARSE_MODEL_PATH)
 
     # 3. Retriever
     retriever = MilvusHybridRetriever(

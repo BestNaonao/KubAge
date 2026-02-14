@@ -5,7 +5,7 @@ from langgraph.graph import StateGraph
 # 假设这些是你项目中的实际模块
 from agent.nodes.analysis_node import AnalysisNode
 from agent.state import AgentState
-from utils.llm_factory import get_chat_model
+from utils.model_factory import get_chat_model
 from test_dataset.analysis_cases import ALL_SCENARIOS, AnalysisTestScenario
 
 

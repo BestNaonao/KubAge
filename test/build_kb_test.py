@@ -7,11 +7,10 @@ from typing import List
 import torch
 from dotenv import find_dotenv, load_dotenv
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_milvus import Milvus
 from transformers import AutoTokenizer
 
-from utils import MarkdownTreeParser, encode_document_for_milvus
+from utils import MarkdownTreeParser, encode_document_for_milvus, get_dense_embed_model
 
 
 def batch_by_token(documents, max_tokens_per_batch=1024) -> List[List[Document]]:
@@ -96,11 +95,7 @@ def build_knowledge_base(
         milvus_password = os.getenv('MILVUS_ROOT_PASSWORD', 'Milvus')
 
     # 1. 初始化嵌入模型
-    embeddings = HuggingFaceEmbeddings(
-        model_name=embedding_model_path,
-        model_kwargs={"device": "cuda" if torch.cuda.is_available() else "cpu", "trust_remote_code": True},
-        encode_kwargs={"normalize_embeddings": True}
-    )
+    embeddings = get_dense_embed_model(embedding_model_path)
 
     # 2. 初始化 MarkdownTreeParser
     tokenizer = AutoTokenizer.from_pretrained(embedding_model_path, trust_remote_code=True)
