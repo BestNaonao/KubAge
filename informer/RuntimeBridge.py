@@ -7,40 +7,38 @@ from queue import Queue
 import torch
 from kubernetes import client, config, watch
 from langchain_huggingface import HuggingFaceEmbeddings
-from pymilvus import (
-    connections,
-    Collection,
-    utility
-)
+from pymilvus import Collection, utility
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
 # 引入项目中的工具函数 (假设 utils.py 在同一目录)
-from utils import csr_to_milvus_format
-
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("RuntimeBridge")
+from utils.milvus_adapter import connect_milvus_by_env, csr_to_milvus_format
 
 
 class RuntimeBridge:
-    def __init__(self,
-                 milvus_host="localhost",
-                 milvus_port="19530",
-                 collection_name="knowledge_base_v3",
-                 embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",
-                 sparse_model_path="BAAI/bge-m3"):
-
+    def __init__(
+            self,
+            collection_name="knowledge_base_v3",
+            embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",
+            sparse_model_path="BAAI/bge-m3",
+            dynamic_partition_name="dynamic_events"
+    ):
         self.collection_name = collection_name
+        self.partition_name = dynamic_partition_name
         self.event_queue = Queue()
+        # 配置日志
+        self.logger = logging.getLogger(type(self).__name__)
+        self.logger.setLevel(logging.INFO)
+        handler = logging.FileHandler("bridge.log", encoding='utf-8')
+        handler.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
 
         # 1. 初始化 K8s 客户端
         self._init_k8s()
 
         # 2. 初始化 Milvus 连接与分区
-        self._init_milvus(milvus_host, milvus_port)
+        self._init_milvus()
 
         # 3. 初始化模型 (显存警告：Agent和Bridge若在同机，需注意显存分配)
         self._init_models(embedding_model_path, sparse_model_path)
@@ -48,31 +46,30 @@ class RuntimeBridge:
     def _init_k8s(self):
         try:
             config.load_incluster_config()
-            logger.info("Loaded in-cluster config.")
-        except:
+            self.logger.info("Loaded in-cluster config.")
+        except config.ConfigException:
             config.load_kube_config()
-            logger.info("Loaded kube-config.")
+            self.logger.info("Loaded kube-config.")
         self.v1 = client.CoreV1Api()
 
-    def _init_milvus(self, host, port):
-        connections.connect(host=host, port=port)
+    def _init_milvus(self):
+        connect_milvus_by_env()
         if not utility.has_collection(self.collection_name):
             raise RuntimeError(
                 f"Collection {self.collection_name} does not exist! Please run build_knowledge_base.py first.")
-
         self.collection = Collection(self.collection_name)
 
         # 检查并创建动态分区
-        if "dynamic_events" not in self.collection.partitions:
+        if not self.collection.has_partition(self.partition_name):
             self.collection.create_partition("dynamic_events")
-            logger.info("Created partition: dynamic_events")
+            self.logger.info("Created partition: dynamic_events")
 
         # 加载集合 (注意：写入时不需要 Load，但我们需要做反向查询，所以必须 Load)
         # 为了节省内存，可以只 Load 静态分区用于查询，但 Milvus API 通常 Load 整个 Collection
         self.collection.load()
 
     def _init_models(self, dense_path, sparse_path):
-        logger.info("Loading Embedding Models...")
+        self.logger.info("Loading Embedding Models...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Dense Model (Qwen)
@@ -88,7 +85,7 @@ class RuntimeBridge:
             use_fp16=True,
             device=device
         )
-        logger.info("Models loaded.")
+        self.logger.info("Models loaded.")
 
     def start(self):
         """启动监听线程和处理线程"""
@@ -100,18 +97,18 @@ class RuntimeBridge:
         processor_thread = threading.Thread(target=self._event_processor, daemon=True)
         processor_thread.start()
 
-        logger.info("Runtime Bridge Started. Press Ctrl+C to exit.")
+        self.logger.info("Runtime Bridge Started. Press Ctrl+C to exit.")
         try:
             while True: time.sleep(1)
         except KeyboardInterrupt:
-            logger.info("Stopping...")
+            self.logger.info("Stopping...")
 
     def _k8s_event_watcher(self):
         """监听 K8s Warning 事件 (Sensory Layer)"""
         w = watch.Watch()
         while True:
             try:
-                logger.info("Watching K8s Events...")
+                self.logger.info("Watching K8s Events...")
                 for event in w.stream(self.v1.list_event_for_all_namespaces):
                     obj = event['object']
                     # 过滤逻辑：只关注 Warning 类型
@@ -128,7 +125,7 @@ class RuntimeBridge:
                         }
                         self.event_queue.put(event_payload)
             except Exception as e:
-                logger.error(f"Watcher Error: {e}")
+                self.logger.error(f"Watcher Error: {e}")
                 time.sleep(5)
 
     def _event_processor(self):
@@ -138,13 +135,13 @@ class RuntimeBridge:
             try:
                 self._process_single_event(event_data)
             except Exception as e:
-                logger.error(f"Processing Error: {e}")
+                self.logger.error(f"Processing Error: {e}")
             finally:
                 self.event_queue.task_done()
 
     def _process_single_event(self, event):
         """核心逻辑：逆向实例化 + 存储"""
-        logger.info(f"Processing Event: {event['reason']} on {event['name']}")
+        self.logger.info(f"Processing Event: {event['reason']} on {event['name']}")
 
         # 1. 文本化 (Textification)
         # 构造类似 Query 的文本，用于去静态库里搜索
@@ -184,7 +181,7 @@ class RuntimeBridge:
 
         if results and results[0]:
             hit = results[0][0]
-            logger.info(f"Mapped to Static Anchor: {hit.entity.get('title')} (Score: {hit.score})")
+            self.logger.info(f"Mapped to Static Anchor: {hit.entity.get('title')} (Score: {hit.score})")
             return {"pk": hit.entity.get("pk"), "title": hit.entity.get("title")}
         return None
 
@@ -233,7 +230,7 @@ class RuntimeBridge:
 
         # 写入动态分区
         self.collection.insert([entry], partition_name="dynamic_events")  # <--- 关键：指定分区
-        logger.info("Inserted into dynamic_events partition.")
+        self.logger.info("Inserted into dynamic_events partition.")
 
 
 if __name__ == "__main__":
