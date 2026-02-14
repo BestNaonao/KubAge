@@ -7,6 +7,7 @@ import numpy as np
 from langchain_core.documents import Document
 from pymilvus import Collection
 
+from retriever import MilvusHybridRetriever
 from utils import generate_node_id
 from utils.milvus_adapter import HYBRID_SEARCH_FIELDS, decode_hit_to_document, decode_query_result_to_document
 
@@ -202,7 +203,7 @@ class GraphTraverser:
         try:
             # 构造 expr: pk in ["a", "b", ...]。注意 Milvus expr 对 list 长度有限制 (通常 < 16384)，这里通常不会超
             expr = f"pk in {json.dumps(candidate_pks)}"
-            search_params = {"metric_type": "COSINE", "params": {"nprobe": 10}}
+            search_params = MilvusHybridRetriever.dense_search_params
 
             # 执行 Search
             res = self.collection.search(
