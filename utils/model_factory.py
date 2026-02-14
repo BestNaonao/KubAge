@@ -1,8 +1,10 @@
 import os
 
+import torch
 from dotenv import load_dotenv, find_dotenv
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
-
+from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
 # ==================== 环境变量加载 ====================
 load_dotenv(find_dotenv())
@@ -30,4 +32,24 @@ def get_chat_model(temperature=0, max_token=16384, frequency_penalty=0, top_p=0.
         frequency_penalty=frequency_penalty,
         top_p=top_p,
         extra_body=extra_body
+    )
+
+def get_dense_embed_model(model_path):
+    return HuggingFaceEmbeddings(
+        model_name=model_path,
+        model_kwargs={
+            "device": "cuda" if torch.cuda.is_available() else "cpu",
+            "trust_remote_code": True,
+            # "use_flash_attention_2": True
+        },
+        encode_kwargs={
+            "normalize_embeddings": True
+        }
+    )
+
+def get_sparse_embed_model(model_path):
+    return BGEM3EmbeddingFunction(
+        model_name=model_path,
+        use_fp16=True,
+        device="cuda" if torch.cuda.is_available() else "cpu"
     )
