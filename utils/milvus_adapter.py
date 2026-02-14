@@ -2,11 +2,12 @@
 Milvus 适配器：处理 Document 对象与 Milvus 数据格式之间的双向转换
 包括元数据序列化、反序列化、CSR 矩阵转换以及结果解析
 """
-
+import os
 from typing import Dict, Any
 
+from dotenv import find_dotenv, load_dotenv
 from langchain_core.documents import Document
-from pymilvus import Hit
+from pymilvus import Hit, connections
 
 from .MarkdownTreeParser import NodeType
 
@@ -20,6 +21,19 @@ SCALAR_FIELDS = [
 ]
 
 HYBRID_SEARCH_FIELDS = SCALAR_FIELDS + ["summary_vector",]
+
+
+def connect_milvus_by_env():
+    # 加载环境变量
+    load_dotenv(find_dotenv())
+    host = os.getenv('MILVUS_HOST', 'localhost')
+    port = os.getenv('MILVUS_PORT', '19530')
+    user = os.getenv('MILVUS_USER', 'root')
+    password = os.getenv('MILVUS_ROOT_PASSWORD', 'Milvus')
+
+    # 连接 Milvus
+    print(f"正在连接 Milvus ({host}:{port})...")
+    connections.connect(alias="default", host=host, port=port, user=user, password=password)
 
 
 def encode_metadata_for_milvus(metadata: Dict[str, Any]) -> Dict[str, Any]:
