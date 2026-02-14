@@ -1,11 +1,8 @@
 import asyncio
-import os
 
 import torch
-from dotenv import load_dotenv, find_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_huggingface import HuggingFaceEmbeddings
-from pymilvus import connections
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
 from agent.graph import build_react_agent
@@ -13,20 +10,13 @@ from agent.nodes import RerankNode
 from retriever import MilvusHybridRetriever
 from utils.llm_factory import get_chat_model
 from utils.mcp_manager import MCPToolManager
+from utils.milvus_adapter import connect_milvus_by_env
 
 
 async def main():
     print("🚀 Starting Kubernetes Agent...")
-    # 加载环境变量
-    load_dotenv(find_dotenv())
-    host = os.getenv('MILVUS_HOST', 'localhost')
-    port = os.getenv('MILVUS_PORT', '19530')
-    user = os.getenv('MILVUS_USER', 'root')
-    password = os.getenv('MILVUS_ROOT_PASSWORD', 'Milvus')
-
     # --- A. 连接 Milvus
-    print(f"正在连接 Milvus ({host}:{port})...")
-    connections.connect(alias="default", host=host, port=port, user=user, password=password)
+    connect_milvus_by_env()
 
     # --- B. 初始化资源 (一次性加载模型，避免重复加载) ---
     print("⏳ Initializing Embeddings and Retriever (this may take a while)...")

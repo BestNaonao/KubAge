@@ -1,14 +1,11 @@
-import os
 from typing import List, Dict, Any
 
 import torch
-from dotenv import load_dotenv, find_dotenv
 from langchain_core.runnables import RunnableConfig
 # 引入 Embedding 依赖
 from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.constants import START, END
 from langgraph.graph import StateGraph
-from pymilvus import connections
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
 from agent.nodes.rerank_node import RerankNode
@@ -18,6 +15,7 @@ from agent.schemas import ProblemAnalysis, ExecutionPlan, PlanAction
 from agent.state import AgentState
 from retriever.MilvusHybridRetriever import MilvusHybridRetriever
 from test_dataset.retrieval_cases import ALL_RETRIEVAL_SCENARIOS, RetrievalTestScenario
+from utils.milvus_adapter import connect_milvus_by_env
 
 
 # ==========================================
@@ -55,16 +53,8 @@ class DummyAnalysisNode:
 # ==========================================
 def retrieval_workflow_test(scenarios: List[RetrievalTestScenario]):
     print("🚀 Starting Retrieval Node Workflow Test Batch...")
-    # 加载环境变量
-    load_dotenv(find_dotenv())
-    host = os.getenv('MILVUS_HOST', 'localhost')
-    port = os.getenv('MILVUS_PORT', '19530')
-    user = os.getenv('MILVUS_USER', 'root')
-    password = os.getenv('MILVUS_ROOT_PASSWORD', 'Milvus')
-
     # --- A. 连接 Milvus
-    print(f"正在连接 Milvus ({host}:{port})...")
-    connections.connect(alias="default", host=host, port=port, user=user, password=password)
+    connect_milvus_by_env()
 
     # --- B. 初始化资源 (一次性加载模型，避免重复加载) ---
     print("⏳ Initializing Embeddings and Retriever (this may take a while)...")

@@ -1,25 +1,14 @@
-import os
-
 import torch
-from dotenv import load_dotenv, find_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
-from pymilvus import connections
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
 from retriever import MilvusHybridRetriever
+from utils.milvus_adapter import connect_milvus_by_env
 
 
 def main():
-    # 加载环境变量
-    load_dotenv(find_dotenv())
-    host = os.getenv('MILVUS_HOST', 'localhost')
-    port = os.getenv('MILVUS_PORT', '19530')
-    user = os.getenv('MILVUS_USER', 'root')
-    password = os.getenv('MILVUS_ROOT_PASSWORD', 'Milvus')
-
     # 1. 连接 Milvus
-    print(f"正在连接 Milvus ({host}:{port})...")
-    connections.connect(alias="default", host=host, port=port, user=user, password=password)
+    connect_milvus_by_env()
 
     # 2. 加载模型 (这里需要加载和 Build 阶段一样的模型)
     # 注意显存控制，如果显存不够，可以把 dense 模型放到 CPU 或者按需加载

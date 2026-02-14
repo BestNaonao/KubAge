@@ -1,17 +1,13 @@
 import json
 import os
-import traceback
 import time
+import traceback
 from pathlib import Path
 from typing import Dict, List
 
 import torch
-from dotenv import find_dotenv, load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
-from transformers import AutoTokenizer
-
 from pymilvus import (
-    connections,
     utility,
     Collection,
     CollectionSchema,
@@ -19,8 +15,10 @@ from pymilvus import (
     DataType,
 )
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
+from transformers import AutoTokenizer
 
 from utils import MarkdownTreeParser, encode_document_for_milvus, csr_to_milvus_format
+from utils.milvus_adapter import connect_milvus_by_env
 
 
 # ==========================================
@@ -192,23 +190,11 @@ def build_knowledge_base(
         min_chunk_size=256,
         core_chunk_size=512,
         max_chunk_size=2048,
-        milvus_host=None,
-        milvus_port=None,
-        milvus_user=None,
-        milvus_password=None,
         index_type="FLAT",
         metric_type="COSINE"
 ):
-    # 加载环境变量
-    load_dotenv(find_dotenv())
-    host = milvus_host or os.getenv('MILVUS_HOST', 'localhost')
-    port = milvus_port or os.getenv('MILVUS_PORT', '19530')
-    user = milvus_user or os.getenv('MILVUS_USER', 'root')
-    password = milvus_password or os.getenv('MILVUS_ROOT_PASSWORD', 'Milvus')
-
     # 1. 连接 Milvus
-    print(f"正在连接 Milvus ({host}:{port})...")
-    connections.connect(alias="default", host=host, port=port, user=user, password=password)
+    connect_milvus_by_env()
 
     # 2. 初始化 Dense Embedding 模型 (Qwen)
     print(f"正在加载 Dense 模型: {embedding_model_path}...")
