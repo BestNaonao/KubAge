@@ -5,8 +5,10 @@ import uuid
 from queue import Queue
 
 from kubernetes import client, config, watch
+from kubernetes.client.models import CoreV1Event
 from pymilvus import Collection, utility
 
+from retriever import MilvusHybridRetriever
 from utils import get_sparse_embed_model, get_dense_embed_model
 # 引入项目中的工具函数 (假设 utils.py 在同一目录)
 from utils.milvus_adapter import connect_milvus_by_env, csr_to_milvus_format
@@ -59,7 +61,7 @@ class RuntimeBridge:
 
         # 检查并创建动态分区
         if not self.collection.has_partition(self.partition_name):
-            self.collection.create_partition("dynamic_events")
+            self.collection.create_partition(self.partition_name)
             self.logger.info("Created partition: dynamic_events")
 
         # 加载集合 (注意：写入时不需要 Load，但我们需要做反向查询，所以必须 Load)
@@ -96,14 +98,14 @@ class RuntimeBridge:
             try:
                 self.logger.info("Watching K8s Events...")
                 for event in w.stream(self.v1.list_event_for_all_namespaces):
-                    obj = event['object']
+                    obj: CoreV1Event = event['object']
                     # 过滤逻辑：只关注 Warning 类型
                     if obj.type == "Warning":
                         # 构造中间态数据
                         event_payload = {
                             "kind": "Event",
-                            "reason": obj.reason,  # e.g., OOMKilled
-                            "message": obj.message,  # 详细日志
+                            "reason": obj.reason,   # e.g., OOMKilled
+                            "message": obj.message,     # 详细日志
                             "namespace": obj.metadata.namespace,
                             "name": obj.involved_object.name,
                             "obj_kind": obj.involved_object.kind,
@@ -129,20 +131,18 @@ class RuntimeBridge:
         """核心逻辑：逆向实例化 + 存储"""
         self.logger.info(f"Processing Event: {event['reason']} on {event['name']}")
 
-        # 1. 文本化 (Textification)
-        # 构造类似 Query 的文本，用于去静态库里搜索
-        query_text = f"Kubernetes fault: {event['reason']}. Error log: {event['message']}"
-        full_display_text = f"【Runtime Alert】\nResource: {event['namespace']}/{event['name']}\nReason: {event['reason']}\nMessage: {event['message']}"
+        # 1. 文本化 (Retrieval-oriented Textification)
+        # 构造类似 Query 的文本，用于去静态库里检索
+        query_text = f"故障: {event['reason']}. 日志: {event['message']}"
+        full_display_text = f"【运行警报】\nResource: {event['namespace']}/{event['name']}\nReason: {event['reason']}\nMessage: {event['message']}"
 
         # 2. 向量化 (Vectorization)
-        # Dense Vector
         dense_vec = self.dense_ef.embed_query(query_text)
-        # Sparse Vector (用于精确匹配错误码)
-        sparse_result = self.sparse_ef.encode_documents([query_text])
-        sparse_vec = csr_to_milvus_format(sparse_result["sparse"])[0]
+        sparse_result = self.sparse_ef.encode_queries([query_text])["sparse"]
+        sparse_vec = csr_to_milvus_format(sparse_result)[0]
 
         # 3. 实体映射 (Entity Mapping / Reverse Instantiation)
-        # 论文 3.5.1: 利用稀疏向量相似度自动建立指向静态知识库的边
+        # 利用稀疏向量相似度自动建立指向静态知识库的边
         anchor = self._find_static_anchor(sparse_vec)
 
         # 4. 构造数据并写入动态分区 (Dynamic Storage)
@@ -150,10 +150,7 @@ class RuntimeBridge:
 
     def _find_static_anchor(self, sparse_vec):
         """在 static_knowledge 分区搜索最相关的排查文档"""
-        search_params = {
-            "metric_type": "IP",
-            "params": {"drop_ratio_search": 0.2}
-        }
+        search_params = MilvusHybridRetriever.sparse_search_params
 
         # 只在静态分区搜索
         results = self.collection.search(
@@ -161,19 +158,19 @@ class RuntimeBridge:
             anns_field="sparse_vector",
             param=search_params,
             limit=1,
-            partition_names=["static_knowledge"],  # <--- 关键：限制在静态分区
+            partition_names=["static_knowledge"],   # <--- 关键：限制在静态分区
             output_fields=["title", "pk"]
         )
 
         if results and results[0]:
             hit = results[0][0]
-            self.logger.info(f"Mapped to Static Anchor: {hit.entity.get('title')} (Score: {hit.score})")
-            return {"pk": hit.entity.get("pk"), "title": hit.entity.get("title")}
+            entity = hit['entity']
+            self.logger.info(f"Mapped to Static Anchor: {entity.get('title')} (Score: {hit.score})")
+            return {"pk": entity.get("pk"), "title": entity.get("title")}
         return None
 
     def _insert_to_milvus(self, event, text, dense_vec, sparse_vec, anchor):
         """将动态节点写入 dynamic_events 分区"""
-
         # 构造 related_links JSON，指向静态锚点
         related_links = []
         if anchor:
@@ -215,7 +212,7 @@ class RuntimeBridge:
         }
 
         # 写入动态分区
-        self.collection.insert([entry], partition_name="dynamic_events")  # <--- 关键：指定分区
+        self.collection.insert([entry], partition_name=self.partition_name)     # <--- 关键：指定分区
         self.logger.info("Inserted into dynamic_events partition.")
 
 
