@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Dict, List
 
 import torch
-from langchain_huggingface import HuggingFaceEmbeddings
 from pymilvus import (
     utility,
     Collection,
@@ -14,10 +13,10 @@ from pymilvus import (
     FieldSchema,
     DataType,
 )
-from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 from transformers import AutoTokenizer
 
-from utils import MarkdownTreeParser, encode_document_for_milvus, csr_to_milvus_format
+from utils import MarkdownTreeParser, encode_document_for_milvus, csr_to_milvus_format, get_dense_embed_model, \
+    get_sparse_embed_model
 from utils.milvus_adapter import connect_milvus_by_env
 
 
@@ -198,11 +197,7 @@ def build_knowledge_base(
 
     # 2. 初始化 Dense Embedding 模型 (Qwen)
     print(f"正在加载 Dense 模型: {embedding_model_path}...")
-    dense_embeddings = HuggingFaceEmbeddings(
-        model_name=embedding_model_path,
-        model_kwargs={"device": "cuda" if torch.cuda.is_available() else "cpu", "trust_remote_code": True},
-        encode_kwargs={"normalize_embeddings": True}
-    )
+    dense_embeddings = get_dense_embed_model(embedding_model_path)
 
     # 获取稠密向量维度 (用于 Schema)
     test_vec = dense_embeddings.embed_query("test")
@@ -212,11 +207,7 @@ def build_knowledge_base(
     # 3. 初始化 Sparse Embedding 模型 (BGE-M3)
     # BGE-M3 是目前生成稀疏向量(SPLADE/BM25 style)的最佳模型之一
     print(f"正在加载 Sparse 模型: {sparse_model_path}...")
-    sparse_ef = BGEM3EmbeddingFunction(
-        model_name=sparse_model_path,
-        use_fp16=True,
-        device="cuda" if torch.cuda.is_available() else "cpu"
-    )
+    sparse_ef = get_sparse_embed_model(sparse_model_path)
 
     # 4. 初始化 MarkdownTreeParser
     print("正在初始化解析器...")

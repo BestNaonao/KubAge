@@ -4,12 +4,10 @@ import time
 import uuid
 from queue import Queue
 
-import torch
 from kubernetes import client, config, watch
-from langchain_huggingface import HuggingFaceEmbeddings
 from pymilvus import Collection, utility
-from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
+from utils import get_sparse_embed_model, get_dense_embed_model
 # 引入项目中的工具函数 (假设 utils.py 在同一目录)
 from utils.milvus_adapter import connect_milvus_by_env, csr_to_milvus_format
 
@@ -69,22 +67,10 @@ class RuntimeBridge:
         self.collection.load()
 
     def _init_models(self, dense_path, sparse_path):
+        """加载嵌入模型(Qwen和BGE-M3)"""
         self.logger.info("Loading Embedding Models...")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        # Dense Model (Qwen)
-        self.dense_ef = HuggingFaceEmbeddings(
-            model_name=dense_path,
-            model_kwargs={"device": device, "trust_remote_code": True},
-            encode_kwargs={"normalize_embeddings": True}
-        )
-
-        # Sparse Model (BGE-M3)
-        self.sparse_ef = BGEM3EmbeddingFunction(
-            model_name=sparse_path,
-            use_fp16=True,
-            device=device
-        )
+        self.dense_ef = get_dense_embed_model(dense_path)
+        self.sparse_ef = get_sparse_embed_model(sparse_path)
         self.logger.info("Models loaded.")
 
     def start(self):

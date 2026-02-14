@@ -10,6 +10,7 @@ from .milvus_adapter import (
 from .MarkdownTreeParser import MarkdownTreeParser, NodeType, generate_node_id
 from .chunker_utils import extract_blocks, restore_blocks
 from .html2md_utils import convert_to_markdown
+from .model_factory import get_chat_model, get_dense_embed_model, get_sparse_embed_model
 
 __all__ = [
     "MarkdownTreeParser",
@@ -23,4 +24,7 @@ __all__ = [
     "csr_to_milvus_format",
     "convert_to_markdown",
     "generate_node_id",
+    "get_chat_model",
+    "get_dense_embed_model",
+    "get_sparse_embed_model",
 ]

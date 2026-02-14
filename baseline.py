@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, END, add_messages
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from utils.llm_factory import get_chat_model
+from utils.model_factory import get_chat_model
 
 
 # ==================== 自定义状态类型 ====================
