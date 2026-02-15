@@ -3,6 +3,7 @@ import threading
 import time
 import uuid
 from queue import Queue
+from typing import Any
 
 from kubernetes import client, config, watch
 from kubernetes.client.models import CoreV1Event
@@ -77,11 +78,11 @@ class RuntimeBridge:
 
     def start(self):
         """启动监听线程和处理线程"""
-        # 线程 1: K8s Event Watcher
+        # 1. 生产者线程: K8s Event Watcher
         watcher_thread = threading.Thread(target=self._k8s_event_watcher, daemon=True)
         watcher_thread.start()
 
-        # 线程 2: Event Processor (Mapping & Storage)
+        # 2. 消费者线程: Event Processor (Mapping & Storage)
         processor_thread = threading.Thread(target=self._event_processor, daemon=True)
         processor_thread.start()
 
@@ -132,23 +133,46 @@ class RuntimeBridge:
         self.logger.info(f"Processing Event: {event['reason']} on {event['name']}")
 
         # 1. 文本化 (Retrieval-oriented Textification)
-        # 构造类似 Query 的文本，用于去静态库里检索
-        query_text = f"故障: {event['reason']}. 日志: {event['message']}"
-        full_display_text = f"【运行警报】\nResource: {event['namespace']}/{event['name']}\nReason: {event['reason']}\nMessage: {event['message']}"
+        # A. 抽象文本 (用于动静对齐 & Summary)
+        # 目的：去掉实体干扰，纯粹描述故障现象，以便匹配静态手册
+        abstract_text = f"故障: {event['reason']}. 日志: {event['message']}"
 
-        # 2. 向量化 (Vectorization)
-        dense_vec = self.dense_ef.embed_query(query_text)
-        sparse_result = self.sparse_ef.encode_queries([query_text])["sparse"]
-        sparse_vec = csr_to_milvus_format(sparse_result)[0]
+        # B. 具体文本 (用于存储 & Agent检索)
+        # 目的：包含实体名称(payment-service)、Namespace等，以便用户能搜到
+        specific_text = (
+            f"【运行警报】\n"
+            f"Resource: {event['namespace']}/{event['name']}\n"  # <--- 关键：包含实体名
+            f"Reason: {event['reason']}\n"
+            f"Message: {event['message']}\n"
+            f"Time: {event['timestamp']}"
+        )
 
-        # 3. 实体映射 (Entity Mapping / Reverse Instantiation)
-        # 利用稀疏向量相似度自动建立指向静态知识库的边
-        anchor = self._find_static_anchor(sparse_vec)
+        # 2. 实体映射 (Entity Mapping / Reverse Instantiation)
+        align_sparse_result = self.sparse_ef.encode_queries([abstract_text])["sparse"]
+        align_sparse_vec = csr_to_milvus_format(align_sparse_result)[0]
+        anchor = self._find_static_anchor(align_sparse_vec)
+
+        # 3. 面向存储的向量化 (Storage-oriented Vectorization)
+        # A. 稠密向量 (Dense Vector)
+        storage_dense_vec = self.dense_ef.embed_documents([specific_text])[0]
+        summary_dense_vec = self.dense_ef.embed_query(abstract_text)
+
+        # B. 稀疏向量 (Sparse Vector)
+        storage_sparse_result = self.sparse_ef.encode_documents([specific_text])["sparse"]
+        storage_sparse_vec = csr_to_milvus_format(storage_sparse_result)[0]
 
         # 4. 构造数据并写入动态分区 (Dynamic Storage)
-        self._insert_to_milvus(event, full_display_text, dense_vec, sparse_vec, anchor)
+        self._insert_to_milvus(
+            event=event,
+            text=specific_text,             # 存具体内容
+            summary=abstract_text,          # 存抽象内容
+            dense_vec=storage_dense_vec,    # 存具体向量 (供 Agent 检索)
+            sparse_vec=storage_sparse_vec,  # 存具体向量 (供 Agent 检索)
+            summary_vec=summary_dense_vec,  # 存抽象向量 (备用)
+            anchor=anchor
+        )
 
-    def _find_static_anchor(self, sparse_vec):
+    def _find_static_anchor(self, sparse_vec: list[float]):
         """在 static_knowledge 分区搜索最相关的排查文档"""
         search_params = MilvusHybridRetriever.sparse_search_params
 
@@ -169,51 +193,72 @@ class RuntimeBridge:
             return {"pk": entity.get("pk"), "title": entity.get("title")}
         return None
 
-    def _insert_to_milvus(self, event, text, dense_vec, sparse_vec, anchor):
-        """将动态节点写入 dynamic_events 分区"""
+    def _insert_to_milvus(
+            self,
+            event,
+            text: str,
+            summary: str,
+            dense_vec: list[float],
+            sparse_vec: dict[int, float],
+            summary_vec: list[float],
+            anchor: dict[str, Any]
+    ):
+        """
+        将动态节点写入 Milvus 的 dynamic_events 分区
+
+        Args:
+            event (dict): 原始事件数据
+            text (str): 具体文本 (包含实体名，用于 text 字段)
+            summary (str): 抽象文本 (去实体化，用于 summary 字段)
+            dense_vec (list): 基于 specific_text 的稠密向量 (用于 vector 字段，供 Agent 检索)
+            sparse_vec (dict): 基于 specific_text 的稀疏向量 (用于 sparse_vector 字段，供 Agent 检索)
+            summary_vec (list): 基于 abstract_text 的稠密向量 (用于 summary_vector 字段，保留语义特征)
+            anchor (dict): 静态锚点信息 {pk, title}
+        """
         # 构造 related_links JSON，指向静态锚点
         related_links = []
         if anchor:
             related_links.append({
-                "type": "static_anchor",  # 标记这是动静对齐的边
-                "text": f"Troubleshooting Guide: {anchor['title']}",
-                "pk": anchor['pk']
+                "type": "static_anchor",  # 边类型：指向静态知识
+                "text": f"Troubleshooting Guide: {anchor['title']}",  # 边的描述
+                "pk": anchor['pk'],  # 目标节点 ID
+                "url": ""  # 动态节点通常没有 URL
             })
 
-        # 填充 Schema 字段 (必须与 build_knowledge_base.py 一致)
+        # 构造符合 Schema 的数据条目 (必须与 build_knowledge_base.py 一致)
         # 不需要字段给默认值
         entry = {
-            "pk": str(uuid.uuid4()),
-            "text": text,
-            "source": "k8s_informer",
-            "title": f"Runtime Error: {event['reason']} - {event['name']}",
+            # 核心字段
+            "pk": str(uuid.uuid4()),        # 动态生成 UUID
+            "text": text,                   # 具体现场日志 (包含 payment-service 等实体)
+            "summary": summary,             # 存储去实例化后的故障摘要
             # 向量
-            "vector": dense_vec,
-            "summary_vector": dense_vec,  # 复用
-            "sparse_vector": sparse_vec,
-            "title_sparse": sparse_vec,  # 复用
-            # 动静关联
-            "related_links": related_links,
-            "parent_id": anchor['pk'] if anchor else "",
-            # 动态标记
-            "node_type": "dynamic_event",
+            "vector": dense_vec,            # [检索用] 包含实体语义
+            "sparse_vector": sparse_vec,    # [检索用] 包含实体关键词权重
+            "title_sparse": sparse_vec,     # [检索用] 标题稀疏向量复用正文的
+            "summary_vector": summary_vec,  # [分析用] 纯粹的故障模式语义 (无实体干扰)
+            # 元数据与动静关联
+            "source": "k8s_informer",           # 数据源标记
+            "title": f"Runtime Alert: {event['reason']} - {event['name']}",
+            "node_type": "dynamic_event",       # 节点类型标记 (Agent根据此字段判断是否高亮)
+            "related_links": related_links,     # JSON 格式的关联链路
+            "parent_id": anchor['pk'] if anchor else "",    # 逻辑上的父节点指向静态手册
             # 填充字段 (默认值)
-            "child_ids": [],
+            "child_ids": [],                # 动态节点无子节点
             "level": 0,
             "token_count": len(text),
             "left_sibling": "",
             "right_sibling": "",
             "from_split": False,
             "merged": False,
-            "nav_next_step": "",
+            "nav_next_step": "",            # 动态节点无预定义的下一步导航
             "nav_see_also": "",
-            "entry_urls": [],
-            "summary": ""
+            "entry_urls": [],               # 无外部 URL
         }
 
         # 写入动态分区
         self.collection.insert([entry], partition_name=self.partition_name)     # <--- 关键：指定分区
-        self.logger.info("Inserted into dynamic_events partition.")
+        self.logger.info(f"Inserted into {self.partition_name} partition.")
 
 
 if __name__ == "__main__":
