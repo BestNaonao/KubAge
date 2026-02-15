@@ -22,10 +22,12 @@ class RuntimeBridge:
             collection_name="knowledge_base_v3",
             embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",
             sparse_model_path="BAAI/bge-m3",
+            static_partition_name=STATIC_PARTITION_NAME,
             dynamic_partition_name=DYNAMIC_PARTITION_NAME
     ):
         self.collection_name = collection_name
-        self.partition_name = dynamic_partition_name
+        self.static_partition = static_partition_name
+        self.dynamic_partition = dynamic_partition_name
         self.event_queue = Queue()
         # 事件风暴去重
         self.dedup_cache = {}  # Key: (namespace, name, reason), Value: last_seen_timestamp
@@ -65,8 +67,8 @@ class RuntimeBridge:
         self.collection = Collection(self.collection_name)
 
         # 检查并创建动态分区
-        if not self.collection.has_partition(self.partition_name):
-            self.collection.create_partition(self.partition_name)
+        if not self.collection.has_partition(self.dynamic_partition):
+            self.collection.create_partition(self.dynamic_partition)
             self.logger.info("Created partition: dynamic_events")
 
         # 加载集合 (注意：写入时不需要 Load，但我们需要做反向查询，所以必须 Load)
@@ -205,7 +207,7 @@ class RuntimeBridge:
             anns_field="sparse_vector",
             param=search_params,
             limit=1,
-            partition_names=[STATIC_PARTITION_NAME],   # <--- 关键：限制在静态分区
+            partition_names=[self.static_partition],    # <--- 关键：限制在静态分区
             output_fields=["title", "pk"]
         )
 
@@ -280,8 +282,8 @@ class RuntimeBridge:
         }
 
         # 写入动态分区
-        self.collection.insert([entry], partition_name=self.partition_name)     # <--- 关键：指定分区
-        self.logger.info(f"Inserted into {self.partition_name} partition.")
+        self.collection.insert([entry], partition_name=self.dynamic_partition)  # <--- 关键：指定分区
+        self.logger.info(f"Inserted into {self.dynamic_partition} partition.")
 
 
 if __name__ == "__main__":

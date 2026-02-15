@@ -9,7 +9,6 @@ from pymilvus import Collection, AnnSearchRequest, RRFRanker
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
 from utils.milvus_adapter import csr_to_milvus_format, decode_hit_to_document, HYBRID_SEARCH_FIELDS
-from workflow.build_knowledge_base import STATIC_PARTITION_NAME
 
 
 class MilvusHybridRetriever(BaseRetriever):
@@ -33,7 +32,7 @@ class MilvusHybridRetriever(BaseRetriever):
     logger: logging.Logger = logging.getLogger(__name__)
 
     def _get_relevant_documents(
-            self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+            self, query: str, *, run_manager: CallbackManagerForRetrieverRun, partition_names: Optional[List[str]] = None,
     ) -> List[Document]:
         # 1. 生成查询向量
         # 1.1 Dense Vector (Qwen)
@@ -44,14 +43,14 @@ class MilvusHybridRetriever(BaseRetriever):
         sparse_vec_list = csr_to_milvus_format(sparse_result)
         sparse_vec = sparse_vec_list[0]  # 取出当前 query 的向量
 
-        return self.search_with_vectors(dense_vec, sparse_vec, [STATIC_PARTITION_NAME])
+        return self.search_with_vectors(dense_vec, sparse_vec, partition_names)
 
 
     def search_with_vectors(
             self,
             dense_vec: List[float],
             sparse_vec: Dict[int, float],
-            partition_names: Optional[List[str]]
+            partition_names: Optional[List[str]] = None,
     ) -> List[Document]:
         """
         计算与检索的核心方法，供 RetrievalNode 调用，使用缓存好的向量进行搜索。
@@ -63,21 +62,21 @@ class MilvusHybridRetriever(BaseRetriever):
                 data=[dense_vec],
                 anns_field=self.dense_field,
                 param=self.dense_search_params,
-                limit=self.top_k
+                limit=self.top_k * 2
             ),
             # (B) Text 稀疏检索
             AnnSearchRequest(
                 data=[sparse_vec],
                 anns_field=self.sparse_text_field,
                 param=self.sparse_search_params,
-                limit=self.top_k
+                limit=self.top_k * 2
             ),
             # (C) Title 稀疏检索
             AnnSearchRequest(
                 data=[sparse_vec],
                 anns_field=self.sparse_title_field,
                 param=self.sparse_search_params,
-                limit=self.top_k
+                limit=self.top_k * 2
             )
         ]
 
