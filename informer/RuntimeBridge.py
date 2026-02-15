@@ -26,6 +26,9 @@ class RuntimeBridge:
         self.collection_name = collection_name
         self.partition_name = dynamic_partition_name
         self.event_queue = Queue()
+        # 事件风暴去重
+        self.dedup_cache = {}  # Key: (namespace, name, reason), Value: last_seen_timestamp
+        self.dedup_ttl = 10
         # 配置日志
         self.logger = logging.getLogger(type(self).__name__)
         self.logger.setLevel(logging.INFO)
@@ -92,6 +95,22 @@ class RuntimeBridge:
         except KeyboardInterrupt:
             self.logger.info("Stopping...")
 
+    def _is_duplicate(self, event):
+        key = (event["namespace"], event["name"], event["reason"])
+        now = time.time()
+
+        if key in self.dedup_cache:
+            last_seen = self.dedup_cache[key]
+            if now - last_seen < self.dedup_ttl:
+                return True  # 是重复事件，跳过
+
+        # 更新缓存
+        self.dedup_cache[key] = now
+        # 简单清理逻辑：防止内存无限增长（生产环境可用 LRUCache）
+        if len(self.dedup_cache) > 1000:
+            self.dedup_cache.clear()
+        return False
+
     def _k8s_event_watcher(self):
         """监听 K8s Warning 事件 (Sensory Layer)"""
         w = watch.Watch()
@@ -112,6 +131,9 @@ class RuntimeBridge:
                             "obj_kind": obj.involved_object.kind,
                             "timestamp": str(obj.last_timestamp)
                         }
+                        if self._is_duplicate(event_payload):
+                            self.logger.debug(f"Skipping duplicate event: {obj.reason}")
+                            continue
                         self.event_queue.put(event_payload)
             except Exception as e:
                 self.logger.error(f"Watcher Error: {e}")
