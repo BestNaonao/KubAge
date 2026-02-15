@@ -50,11 +50,13 @@ class MilvusHybridRetriever(BaseRetriever):
             self,
             dense_vec: List[float],
             sparse_vec: Dict[int, float],
+            limit: Optional[int] = None,
             partition_names: Optional[List[str]] = None,
     ) -> List[Document]:
         """
         计算与检索的核心方法，供 RetrievalNode 调用，使用缓存好的向量进行搜索。
         """
+        top_k = limit if limit else self.top_k
         # 2. 构建搜索请求 (全路召回：Text Dense + Text Sparse + Title Sparse)
         search_requests = [
             # (A) Text 稠密检索
@@ -62,21 +64,21 @@ class MilvusHybridRetriever(BaseRetriever):
                 data=[dense_vec],
                 anns_field=self.dense_field,
                 param=self.dense_search_params,
-                limit=self.top_k * 2
+                limit=top_k * 2
             ),
             # (B) Text 稀疏检索
             AnnSearchRequest(
                 data=[sparse_vec],
                 anns_field=self.sparse_text_field,
                 param=self.sparse_search_params,
-                limit=self.top_k * 2
+                limit=top_k * 2
             ),
             # (C) Title 稀疏检索
             AnnSearchRequest(
                 data=[sparse_vec],
                 anns_field=self.sparse_title_field,
                 param=self.sparse_search_params,
-                limit=self.top_k * 2
+                limit=top_k * 2
             )
         ]
 
@@ -87,7 +89,7 @@ class MilvusHybridRetriever(BaseRetriever):
             results = collection.hybrid_search(
                 reqs=search_requests,
                 rerank=RRFRanker(),     # 或者使用 WeightedRanker(0.6, 0.2, 0.2)
-                limit=self.top_k,
+                limit=top_k,
                 output_fields=HYBRID_SEARCH_FIELDS, # 只拉取所有标量和摘要向量字段，为拓扑扩展做准备
                 partition_names=partition_names
             )
