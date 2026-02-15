@@ -1,18 +1,15 @@
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from langchain_huggingface import HuggingFaceEmbeddings
-from pymilvus import (
-    Collection,
-    AnnSearchRequest,
-    RRFRanker
-)
+from pymilvus import Collection, AnnSearchRequest, RRFRanker
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
 from utils.milvus_adapter import csr_to_milvus_format, decode_hit_to_document, HYBRID_SEARCH_FIELDS
+from workflow.build_knowledge_base import STATIC_PARTITION_NAME
 
 
 class MilvusHybridRetriever(BaseRetriever):
@@ -41,17 +38,21 @@ class MilvusHybridRetriever(BaseRetriever):
         # 1. 生成查询向量
         # 1.1 Dense Vector (Qwen)
         dense_vec = self.dense_embedding_func.embed_query(query)
-
         # 1.2 Sparse Vector (BGE-M3)
         # 返回的是 CSR 矩阵，需要转换
         sparse_result = self.sparse_embedding_func.encode_queries([query])["sparse"]
         sparse_vec_list = csr_to_milvus_format(sparse_result)
         sparse_vec = sparse_vec_list[0]  # 取出当前 query 的向量
 
-        return self.search_with_vectors(dense_vec, sparse_vec)
+        return self.search_with_vectors(dense_vec, sparse_vec, [STATIC_PARTITION_NAME])
 
 
-    def search_with_vectors(self, dense_vec: List[float], sparse_vec: Dict[int, float]) -> List[Document]:
+    def search_with_vectors(
+            self,
+            dense_vec: List[float],
+            sparse_vec: Dict[int, float],
+            partition_names: Optional[List[str]]
+    ) -> List[Document]:
         """
         计算与检索的核心方法，供 RetrievalNode 调用，使用缓存好的向量进行搜索。
         """
@@ -86,9 +87,10 @@ class MilvusHybridRetriever(BaseRetriever):
             collection = Collection(self.collection_name)
             results = collection.hybrid_search(
                 reqs=search_requests,
-                rerank=RRFRanker(),  # 或者使用 WeightedRanker(0.6, 0.2, 0.2)
+                rerank=RRFRanker(),     # 或者使用 WeightedRanker(0.6, 0.2, 0.2)
                 limit=self.top_k,
-                output_fields=HYBRID_SEARCH_FIELDS # 只拉取所有标量和摘要向量字段，为拓扑扩展做准备
+                output_fields=HYBRID_SEARCH_FIELDS, # 只拉取所有标量和摘要向量字段，为拓扑扩展做准备
+                partition_names=partition_names
             )
         except Exception as e:
             self.logger.error(f"Hybrid search failed: {e}")  # 建议使用日志而非print
@@ -96,11 +98,9 @@ class MilvusHybridRetriever(BaseRetriever):
 
         # 4. 结果转换为 LangChain Document
         documents = []
-        if not results:
-            return []
-
-        for hits in results:  # hybrid_search 返回的是 list of hits
-            for hit in hits:
-                documents.append(decode_hit_to_document(hit, content_field=self.text_output_field))
+        if results:
+            for hits in results:  # hybrid_search 返回的是 list of hits
+                for hit in hits:
+                    documents.append(decode_hit_to_document(hit, content_field=self.text_output_field))
 
         return documents
