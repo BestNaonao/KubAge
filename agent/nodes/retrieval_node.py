@@ -9,6 +9,7 @@ from agent.schemas import ExecutionPlan
 from agent.state import AgentState
 from retriever import MilvusHybridRetriever, GraphTraverser
 from utils import csr_to_milvus_format
+from workflow.build_knowledge_base import STATIC_PARTITION_NAME
 
 
 class VectorSchema(TypedDict):
@@ -98,6 +99,7 @@ class RetrievalNode:
                 anchors = self.retriever.search_with_vectors(
                     dense_vec=vectors["dense"],
                     sparse_vec=vectors["sparse"],
+                    partition_names=[STATIC_PARTITION_NAME]
                 )
                 # 标记来源
                 for doc in anchors:

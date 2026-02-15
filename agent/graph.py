@@ -21,7 +21,7 @@ Self_Regulation = "Self-Regulation"
 Expression =  "Expression"
 
 
-def build_react_agent(llm, retriever, reranker, tool_descriptions: str, config_path="config/mcp_config.json"):
+def build_react_agent(llm, retriever, traverser, reranker, tool_descriptions: str, config_path="config/mcp_config.json"):
     """
     构建图，传入 tool_descriptions 供 Planning 节点使用
     """
@@ -32,7 +32,7 @@ def build_react_agent(llm, retriever, reranker, tool_descriptions: str, config_p
     analysis_node = AnalysisNode(llm)
     # 注入工具描述
     planning_node = PlanningNode(llm, tool_descriptions)
-    retrieval_node = RetrievalNode(retriever, reranker)
+    retrieval_node = RetrievalNode(retriever, traverser, reranker)
     tool_node = ToolCallNode()  # ToolNode 内部自行获取单例，无需传入
     regulation_node = RegulationNode(llm)
     expression_node = ExpressionNode()

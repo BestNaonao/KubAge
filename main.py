@@ -4,10 +4,11 @@ from langchain_core.messages import HumanMessage
 
 from agent.graph import build_react_agent
 from agent.nodes import RerankNode
-from retriever import MilvusHybridRetriever
+from retriever import MilvusHybridRetriever, GraphTraverser
 from utils import get_chat_model, get_dense_embed_model, get_sparse_embed_model
 from utils.mcp_manager import MCPToolManager
 from utils.milvus_adapter import connect_milvus_by_env
+from workflow.build_knowledge_base import STATIC_PARTITION_NAME
 
 
 async def main():
@@ -37,6 +38,8 @@ async def main():
         sparse_embedding_func=sparse_embedding,
         top_k=5
     )
+
+    traverser = GraphTraverser(COLLECTION_NAME, partition_names=[STATIC_PARTITION_NAME])
 
     reranker = RerankNode(RERANKER_MODEL_PATH, 5)
 
@@ -68,7 +71,7 @@ async def main():
         )
 
         # 3. 构建 Agent
-        app = build_react_agent(llm, retriever, reranker, tool_descriptions=tool_str)
+        app = build_react_agent(llm, retriever, traverser, reranker, tool_descriptions=tool_str)
 
         print("\n🚀 Agent Initialized. Ready for queries.")
 

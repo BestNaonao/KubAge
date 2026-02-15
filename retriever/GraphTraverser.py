@@ -1,7 +1,7 @@
 import json
 import logging
 import math
-from typing import List, Set, Dict
+from typing import List, Set, Dict, Optional
 
 import numpy as np
 from langchain_core.documents import Document
@@ -23,12 +23,14 @@ class GraphTraverser:
             self,
             milvus_collection_name: str,
             milvus_connection_alias: str = "default",
+            partition_names: Optional[List[str]] = None,
             parent_decay_threshold: float = 0.75,
             absolute_min_similarity: float = 0.2,  # 防止相关性太低
             link_proportion: float = 0.75,
             max_link_top_k: int = 10
     ):
         self.collection = Collection(milvus_collection_name, using=milvus_connection_alias)
+        self.partition_names = partition_names
         # 阈值配置
         self.decay_threshold = parent_decay_threshold
         self.min_sim = absolute_min_similarity
@@ -212,6 +214,7 @@ class GraphTraverser:
                 param=search_params,
                 limit=top_l,
                 expr=expr,
+                partition_names=self.partition_names,
                 output_fields=HYBRID_SEARCH_FIELDS,
             )
 
@@ -246,7 +249,7 @@ class GraphTraverser:
 
         try:
             expr = f"pk in {json.dumps(pks)}"   # 构造表达式
-            res = self.collection.query(expr, output_fields=HYBRID_SEARCH_FIELDS)
+            res = self.collection.query(expr, output_fields=HYBRID_SEARCH_FIELDS, partition_names=self.partition_names)
 
             documents = []
             for row in res:
