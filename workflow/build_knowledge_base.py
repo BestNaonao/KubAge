@@ -6,13 +6,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import torch
-from pymilvus import (
-    utility,
-    Collection,
-    CollectionSchema,
-    FieldSchema,
-    DataType,
-)
+from pymilvus import utility, Collection, CollectionSchema, FieldSchema, DataType
 from transformers import AutoTokenizer
 
 from utils import MarkdownTreeParser, encode_document_for_milvus, csr_to_milvus_format, get_dense_embed_model, \
