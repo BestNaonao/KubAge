@@ -96,7 +96,7 @@ class GraphTraverser:
         # 2. 批量拉取所有祖先文档 (1次 IO)
         # 过滤掉已经是 Anchor 自身的文档 (理论上 generate_node_id 不会冲突，但为了安全)
         fetch_list = list(all_ancestor_pks - existing_pks)
-        fetched_docs = self._batch_fetch(fetch_list)
+        fetched_docs = self.batch_fetch(fetch_list)
         doc_lookup = {d.metadata.get("pk"): d for d in fetched_docs}    # 建立倒查表: pk -> Document
 
         # 3. 内存中执行语义衰减检查
@@ -240,7 +240,7 @@ class GraphTraverser:
             # Fallback (可选): 如果 search 失败，可以降级回 batch fetch，但通常 search 失败 fetch 也会失败
             return []
 
-    def _batch_fetch(self, pks: List[str]) -> List[Document]:
+    def batch_fetch(self, pks: List[str]) -> List[Document]:
         """
         从 Milvus 批量获取文档
         """
