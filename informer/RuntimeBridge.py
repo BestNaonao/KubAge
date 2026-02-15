@@ -13,6 +13,7 @@ from retriever import MilvusHybridRetriever
 from utils import get_sparse_embed_model, get_dense_embed_model
 # 引入项目中的工具函数 (假设 utils.py 在同一目录)
 from utils.milvus_adapter import connect_milvus_by_env, csr_to_milvus_format
+from workflow.build_knowledge_base import STATIC_PARTITION_NAME, DYNAMIC_PARTITION_NAME
 
 
 class RuntimeBridge:
@@ -21,7 +22,7 @@ class RuntimeBridge:
             collection_name="knowledge_base_v3",
             embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",
             sparse_model_path="BAAI/bge-m3",
-            dynamic_partition_name="dynamic_events"
+            dynamic_partition_name=DYNAMIC_PARTITION_NAME
     ):
         self.collection_name = collection_name
         self.partition_name = dynamic_partition_name
@@ -204,7 +205,7 @@ class RuntimeBridge:
             anns_field="sparse_vector",
             param=search_params,
             limit=1,
-            partition_names=["static_knowledge"],   # <--- 关键：限制在静态分区
+            partition_names=[STATIC_PARTITION_NAME],   # <--- 关键：限制在静态分区
             output_fields=["title", "pk"]
         )
 

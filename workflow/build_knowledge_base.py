@@ -20,6 +20,10 @@ from utils import MarkdownTreeParser, encode_document_for_milvus, csr_to_milvus_
 from utils.milvus_adapter import connect_milvus_by_env
 
 
+# 定义分区名称常量
+STATIC_PARTITION_NAME = "static_knowledge"
+DYNAMIC_PARTITION_NAME = "dynamic_events"
+
 # ==========================================
 # Schema 定义
 # ==========================================
@@ -220,7 +224,7 @@ def build_knowledge_base(
         max_chunk_size=max_chunk_size,
     )
 
-    # 5. 创建或重建集合
+    # 5. 创建或重建集合与分区
     if utility.has_collection(collection_name):
         print(f"集合 {collection_name} 已存在，正在删除重建...")
         utility.drop_collection(collection_name)
@@ -228,6 +232,11 @@ def build_knowledge_base(
     schema = create_hybrid_schema(dense_dim)
     collection = Collection(name=collection_name, schema=schema)
     print(f"集合 {collection_name} 创建成功。")
+
+    # 创建静态知识分区
+    if not collection.has_partition(STATIC_PARTITION_NAME):
+        collection.create_partition(STATIC_PARTITION_NAME)
+        print(f"分区 {STATIC_PARTITION_NAME} 创建成功。")
 
     # 6. 解析所有 Markdown 文件
     docs = []
@@ -320,7 +329,8 @@ def build_knowledge_base(
         # 7.5 执行插入
         try:
             insert_start_time = time.time()
-            collection.insert(insert_data)
+            # 插入静态分区
+            collection.insert(insert_data, partition_name=STATIC_PARTITION_NAME)
             processed_count += len(batch)
             insert_used_time = time.time() - insert_start_time
             batch_used_time = time.time() - batch_start_time
