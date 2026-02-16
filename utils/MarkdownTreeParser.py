@@ -19,6 +19,7 @@ def generate_node_id(title: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, title))
 
 class NodeType(Enum):
+    EVENT = "dynamic_event"
     ROOT = "root"
     SECTION = "section"
     CONTAINER = "container"
