@@ -6,8 +6,8 @@ from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from agent.schemas import OperationType
-from utils.document_schema import SourceType
+from agent.schemas import OperationType, ProblemAnalysis
+from utils import NodeType, SourceType
 
 RERANK_SYSTEM_PROMPT = """You are performing binary relevance judgment for retrieval reranking.
 Determine whether the given Kubernetes documentation fragment contains authoritative and actionable information that can directly help answer or resolve the technical question described in the Query.
@@ -243,56 +243,66 @@ class RerankNode:
         return final_scores
 
     def __call__(self, state: dict, config: RunnableConfig) -> Dict[str, Any]:
+        """
+        执行重排序，包含对动态事件的保护逻辑
+        """
         print("\n--- [Gen-Rerank Node] Running ---")
 
         retrieved_docs = state.get("retrieved_docs", [])
         if len(retrieved_docs) <= 0:
             return {"retrieved_docs": []}
 
-        print(f"Max Token Count: {max([doc.metadata['token_count'] for doc in retrieved_docs])}")
+        # 1. 分离动态事件和普通文档
+        dynamic_docs = []
+        static_docs = []
+        for doc in retrieved_docs:
+            if doc.metadata.get("node_type") == NodeType.EVENT:
+                dynamic_docs.append(doc)
+            else:
+                static_docs.append(doc)
 
-        # 确定 Query (优先使用 Analysis 阶段的技术摘要)
-        analysis = state.get("analysis")
+        print(f"   ⚖️ Reranking: {len(dynamic_docs)} dynamic events + {len(static_docs)} static docs.")
 
-        if analysis:
-            # 优先使用技术摘要
-            query_text = analysis.technical_summary
-            # 获取操作类型
-            op_type = analysis.target_operation
-            print(f"🎯 Context: {op_type} | Query: {query_text[:100]}...")
-        else:
-            query_text = state["messages"][-1].content
-            op_type = None
-            print(f"🎯 Context: Raw Input | Query: {query_text[:100]}...")
+        # 2. 对静态文档进行正常的 Rerank
+        reranked_static = []
+        if static_docs:
+            analysis: ProblemAnalysis = state.get("analysis")
+            # 获取技术摘要和操作类型
+            query_text = analysis.technical_summary if analysis else state["messages"][-1].content
+            op_type = analysis.target_operation if analysis else None
+            print(f"🎯 Context: {op_type.value if op_type else "Raw Input"} | Query: {query_text[:100]}...")
 
-        # 根据操作类型生成动态指令，提高重排针对性
-        dynamic_instruction = self.op_prompt_map.get(op_type, self.base_instruct)
-        print(f"📋 Instruction: {dynamic_instruction}")
+            # 根据操作类型生成动态指令，提高重排针对性
+            dynamic_instruction = self.op_prompt_map.get(op_type, self.base_instruct)
+            print(f"📋 Instruction: {dynamic_instruction}")
 
-        # 准备数据对
-        input_texts = [
-            self._format_input_pair(dynamic_instruction, query_text, doc)
-            for doc in retrieved_docs
-        ]
+            # 准备数据对
+            input_texts = [
+                self._format_input_pair(dynamic_instruction, query_text, doc) for doc in static_docs
+            ]
 
-        try:
-            # 计算分数
-            scores = self._compute_scores(input_texts)
+            try:
+                # 计算分数
+                scores = self._compute_scores(input_texts)
 
-            # 绑定分数并排序
-            doc_score_pairs = list(zip(retrieved_docs, scores))
-            doc_score_pairs.sort(key=lambda x: x[1], reverse=True)
+                # 绑定分数并排序
+                doc_score_pairs = list(zip(static_docs, scores))
+                doc_score_pairs.sort(key=lambda x: x[1], reverse=True)
 
-            print(f"📊 Reranking Results (Top {self.top_n}):")
-            reranked_docs = []
-            for doc, score in doc_score_pairs[:self.top_n]:
-                doc.metadata["rerank_score"] = float(score)
-                reranked_docs.append(doc)
-                print(f"   [{doc.metadata.get('source_type', 'UNK')}] Score: {score:.4f} | Title: {doc.metadata.get('title')}")
+                print(f"📊 Reranking Results (Top {self.top_n}):")
 
-            return {"retrieved_docs": reranked_docs}
+                for doc, score in doc_score_pairs[:self.top_n]:
+                    doc.metadata["rerank_score"] = float(score)
+                    reranked_static.append(doc)
+                    print(f"   [{doc.metadata.get('source_type', SourceType.UNKNOWN)}] Score: {score:.4f} "
+                          f"| Title: {doc.metadata.get('title')}")
+            except Exception as e:
+                print(f"❌ Rerank Failed: {e}")
+                # 如果重排失败，降级返回原始结果的前 N 个
+                reranked_static = static_docs[:self.top_n]
 
-        except Exception as e:
-            print(f"❌ Rerank Failed: {e}")
-            # 如果重排失败，降级返回原始结果的前 N 个
-            return {"retrieved_docs": retrieved_docs[:self.top_n]}
+        # 3. 结果合并：强制保留动态事件，并放在最前
+        # 动态事件是“事实”，不需要 Rerank 过滤（因为检索时只取了 Top-2，已经很精简了）
+        final_docs = dynamic_docs + reranked_static
+        print(f"✅ Final Output: {len(dynamic_docs)} Events + {len(reranked_static)} Static Docs")
+        return {"retrieved_docs": final_docs}
