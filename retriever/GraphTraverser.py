@@ -9,6 +9,7 @@ from pymilvus import Collection
 
 from retriever import MilvusHybridRetriever
 from utils import generate_node_id
+from utils.document_schema import SourceType
 from utils.milvus_adapter import HYBRID_SEARCH_FIELDS, decode_hit_to_document, decode_query_result_to_document
 
 
@@ -125,7 +126,7 @@ class GraphTraverser:
 
                 if sim_j >= required_score and sim_j > self.min_sim:
                     if ancestor_pk not in existing_pks:     # 达标：加入结果，元数据增强
-                        parent_doc.metadata["source_type"] = "parent"
+                        parent_doc.metadata["source_type"] = SourceType.PARENT
                         parent_doc.metadata["source_desc"] = f"Parent of: '{current_child_text}'"
                         # 记录并扩展
                         existing_pks.add(ancestor_pk)
@@ -155,9 +156,9 @@ class GraphTraverser:
             next_id: str = doc.metadata.get("right_sibling")
 
             if prev_id and prev_id not in existing_pks and prev_id not in candidate_map:
-                candidate_map[prev_id] = (f"Previous of '{source_title}'", "sibling")
+                candidate_map[prev_id] = (f"Previous of '{source_title}'", SourceType.SIBLING)
             if next_id and next_id not in existing_pks and next_id not in candidate_map:
-                candidate_map[next_id] = (f"Next of '{source_title}'", "sibling")
+                candidate_map[next_id] = (f"Next of '{source_title}'", SourceType.SIBLING)
 
             # 2. 后处理引用链接 (优先级较高，覆写 or 融合)
             for link in doc.metadata.get("related_links", []):
@@ -175,11 +176,11 @@ class GraphTraverser:
                         if target_pk in candidate_map:
                             # 【高阶策略】如果已经存在（说明既是兄弟又是引用），可以合并描述
                             old_desc, old_type = candidate_map[target_pk]
-                            if "sibling" in old_type:
+                            if old_type == SourceType.SIBLING:
                                 merged_desc = f"{link_desc} (also {old_desc})"
-                                candidate_map[target_pk] = (merged_desc, "link")
+                                candidate_map[target_pk] = (merged_desc, SourceType.LINK)
                         else:
-                            candidate_map[target_pk] = (link_desc, "link")  # 未检索，直接添加
+                            candidate_map[target_pk] = (link_desc, SourceType.LINK) # 未检索，直接添加
 
         if not candidate_map:
             return []
@@ -222,7 +223,7 @@ class GraphTraverser:
                     decoded_doc = decode_hit_to_document(hit, content_field="text")
                     pk = decoded_doc.metadata.get("pk")
                     # 恢复来源上下文，注入扩展元数据
-                    source_desc, source_type = candidate_map.get(pk, ("Unknown link", "link"))
+                    source_desc, source_type = candidate_map.get(pk, ("Unknown link", SourceType.UNKNOWN))
                     decoded_doc.metadata["source_type"] = source_type
                     decoded_doc.metadata["source_desc"] = source_desc
                     # 记录并扩展

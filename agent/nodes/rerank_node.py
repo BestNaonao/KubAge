@@ -7,7 +7,7 @@ from langchain_core.runnables import RunnableConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from agent.schemas import OperationType
-
+from utils.document_schema import SourceType
 
 RERANK_SYSTEM_PROMPT = """You are performing binary relevance judgment for retrieval reranking.
 Determine whether the given Kubernetes documentation fragment contains authoritative and actionable information that can directly help answer or resolve the technical question described in the Query.
@@ -128,11 +128,11 @@ class RerankNode:
         content = doc.page_content
 
         # 显式注入 retrieval_source 信息，如果没有 metadata，给默认值
-        source_type = doc.metadata.get("source_type", "unknown")
+        source_type = doc.metadata.get("source_type", SourceType.UNKNOWN)
         source_desc = doc.metadata.get("source_desc", "Retrieved via vector search")
 
         # 构造上下文描述字符串。例如: "[Retrieval Context]: Type=parent. Info=Parent of: 'Debug Service'"
-        context_str = f"[Retrieval Context]: Type={source_type.upper()}. Info={source_desc}"
+        context_str = f"[Retrieval Context]: Type={source_type.value}. Info={source_desc}"
 
         # 拼接增强后的 Document 内容。将 Context 放在 Content 之前，确保模型先看到文档的定位
         enriched_doc = f"[Title]: {title}\n{context_str}\n[Content]: {content}"

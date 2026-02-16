@@ -10,7 +10,7 @@ from kubernetes.client.models import CoreV1Event
 from pymilvus import Collection, utility
 
 from retriever import MilvusHybridRetriever
-from utils import get_sparse_embed_model, get_dense_embed_model
+from utils import get_sparse_embed_model, get_dense_embed_model, NodeType
 # 引入项目中的工具函数 (假设 utils.py 在同一目录)
 from utils.milvus_adapter import connect_milvus_by_env, csr_to_milvus_format
 from workflow.build_knowledge_base import STATIC_PARTITION_NAME, DYNAMIC_PARTITION_NAME
@@ -265,7 +265,7 @@ class RuntimeBridge:
             # 元数据与动静关联
             "source": "k8s_informer",           # 数据源标记
             "title": f"Runtime Alert: {event['reason']} - {event['name']}",
-            "node_type": "dynamic_event",       # 节点类型标记 (Agent根据此字段判断是否高亮)
+            "node_type": NodeType.EVENT.value,       # 节点类型标记 (Agent根据此字段判断是否高亮)
             "related_links": related_links,     # JSON 格式的关联链路
             "parent_id": anchor['pk'] if anchor else "",    # 逻辑上的父节点指向静态手册
             # 填充字段 (默认值)

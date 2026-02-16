@@ -9,6 +9,7 @@ from agent.schemas import ExecutionPlan, OperationType
 from agent.state import AgentState
 from retriever import MilvusHybridRetriever, GraphTraverser
 from utils import csr_to_milvus_format
+from utils.document_schema import SourceType
 from workflow.build_knowledge_base import STATIC_PARTITION_NAME, DYNAMIC_PARTITION_NAME
 
 
@@ -21,7 +22,14 @@ class RetrievalNode:
     检索节点，批处理向量嵌入，实现双轨制、三阶段检索：静态轨与动态轨，粗筛（Retrieval）、扩展（Expansion）和精筛（Rerank）
     """
     logger = logging.getLogger(__name__)
-    priority_map = {'dynamic_event': 4,'anchor': 3, 'parent': 2, 'link': 1,  'sibling': 1}     # 文档来源的优先级
+    priority_map = {
+        SourceType.DYNAMIC: 4,
+        SourceType.ANCHOR: 3,
+        SourceType.PARENT: 2,
+        SourceType.LINK: 1,
+        SourceType.SIBLING: 1,
+        SourceType.UNKNOWN: 0
+    }       # 文档来源的优先级
     dynamic_track_ops = [OperationType.DIAGNOSIS, OperationType.RESOURCE_INQUIRY, OperationType.RESTART]
 
     def __init__(self, retriever: MilvusHybridRetriever, traverser: GraphTraverser, reranker: RerankNode):
@@ -63,7 +71,7 @@ class RetrievalNode:
         return cache
 
     def _get_source_priority(self, document: Document) -> int:
-        return self.priority_map.get(document.metadata.get("source_type", "unknown"), 0)
+        return self.priority_map.get(document.metadata.get("source_type"), 0)
 
     def _upsert_doc(self, buffer: Dict[str, Document], doc: Document) -> None:
         """合并文档到 Buffer，保留高优先级版本"""
@@ -103,7 +111,7 @@ class RetrievalNode:
                 )
                 # 标记来源
                 for doc in anchors:
-                    doc.metadata["source_type"] = "anchor"
+                    doc.metadata["source_type"] = SourceType.ANCHOR
                     doc.metadata["source_desc"] = f"Direct hit by query: '{query}'"
 
                 # 2. 拓扑扩展 (Graph Topology Expansion)
@@ -148,7 +156,7 @@ class RetrievalNode:
 
             for doc in dynamic_hits:
                 # 标记 Dynamic
-                doc.metadata["source_type"] = "dynamic_event"
+                doc.metadata["source_type"] = SourceType.DYNAMIC
                 doc.metadata["source_desc"] = "Runtime Event Match"
                 self._upsert_doc(candidate_buffer, doc)
 
@@ -167,7 +175,7 @@ class RetrievalNode:
                     linked_static_docs = self.traverser.batch_fetch(static_anchor_pks)
 
                     for static_doc in linked_static_docs:
-                        static_doc.metadata["source_type"] = "link"  # 或者叫 alignment_anchor
+                        static_doc.metadata["source_type"] = SourceType.LINK    # 或者叫 alignment_anchor
                         static_doc.metadata["source_desc"] = f"Aligned from Event: {doc.metadata.get('title')}"
                         self._upsert_doc(candidate_buffer, static_doc)
 
