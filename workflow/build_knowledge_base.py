@@ -283,14 +283,10 @@ def build_knowledge_base(
         title_sparse_list = csr_to_milvus_format(title_csr)
 
         # 7.4 组装数据用于 Collection.insert
-        # Pymilvus insert 需要 list of list (按列) 或者 list of dict (按行)
-        # 这里构造 list of dict 更清晰
+        # Pymilvus insert 需要 list of list (按列) 或者 list of dict (按行)，这里构造 list of dict 更清晰
         insert_data = []
         for j, doc in enumerate(encoded_batch):
             meta = doc.metadata
-
-            entry_urls_list = list(meta.get("anchors", []))
-            related_links_json = meta.get("related_links", [])
 
             entry = {
                 "pk": doc.id,
@@ -312,8 +308,8 @@ def build_knowledge_base(
                 "nav_next_step": meta.get("nav_next_step"),
                 "nav_see_also": meta.get("nav_see_also"),
                 # Graph-RAG 字段
-                "entry_urls": entry_urls_list,
-                "related_links": related_links_json,
+                "entry_urls": list(meta.get("anchors", [])),
+                "related_links": meta.get("related_links", []),
                 # 递归摘要字段
                 "summary": "",
                 "summary_vector": text_dense_vectors[j],    # 暂时使用 text vector 占位

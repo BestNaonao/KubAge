@@ -9,7 +9,7 @@ from dotenv import find_dotenv, load_dotenv
 from langchain_core.documents import Document
 from pymilvus import Hit, connections
 
-from .MarkdownTreeParser import NodeType
+from utils.document_schema import NodeType
 
 # 定义 Milvus 中存储的所有标量字段 (用于检索时 output_fields，避免拉取 vector 字段)
 SCALAR_FIELDS = [
@@ -114,10 +114,9 @@ def decode_hit_to_document(hit: Hit, content_field: str = "text") -> Document:
     # 2. 提取正文，如果未指定 output_fields，可能拿不到 text
     page_content = entity.get(content_field, "")
 
-    # 3. 提取所有元数据字段
+    # 3. 提取所有元数据字段，只放入所需字段
     raw_metadata = {}
     for field in entity.keys():
-        # 只放入所需字段
         if field != content_field and field in HYBRID_SEARCH_FIELDS:
             raw_metadata[field] = entity.get(field)
 
@@ -125,21 +124,14 @@ def decode_hit_to_document(hit: Hit, content_field: str = "text") -> Document:
     raw_metadata["pk"] = hit.id
     raw_metadata["score"] = hit.score
 
-    # 5. 解码特殊格式 (JSON -> List, Str -> Enum)
+    # 5. 解码特殊格式，构建 Document，将 pk 也赋值给 doc.id
     final_metadata = decode_metadata_from_milvus(raw_metadata)
-
-    # 6. 构建 Document
     doc = Document(page_content=page_content, metadata=final_metadata)
-
-    # 将 pk 也赋值给 doc.id，方便 LangChain 后续使用
     setattr(doc, 'id', str(hit.id))
 
     return doc
 
-def decode_query_result_to_document(
-    row: dict,
-    content_field: str = "text"
-) -> Document:
+def decode_query_result_to_document(row: dict, content_field: str = "text") -> Document:
     """
     将 Milvus collection.query 返回的 dict 转换为 LangChain Document
     """

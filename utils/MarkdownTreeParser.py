@@ -32,7 +32,7 @@ class MarkdownTreeParser:
         """
         初始化Markdown树解析器
 
-        参数:
+        Args:
             embeddings: HuggingFace嵌入模型
             tokenizer: 用于token计数的分词器
             min_chunk_size: 最小块大小（用于语义切分和合并）
@@ -70,7 +70,7 @@ class MarkdownTreeParser:
         """
         将Markdown文档解析为文档块树
 
-        参数:
+        Args:
             file_path: Markdown文件的完整路径
 
         返回:
@@ -157,9 +157,9 @@ class MarkdownTreeParser:
             anchors: List[str] = None,
             outlinks: Dict[str, List[str]] = None,
     ) -> Document:
-        """创建文档节点
-
-        参数:
+        """
+        创建文档节点
+        Args:
             content: 节点内容
             source: 源文件路径
             parent_id: 父节点ID
@@ -206,11 +206,11 @@ class MarkdownTreeParser:
         2. 提取并清洗 HLINK (产生 outlinks)
         3. 计算 Token 数 (基于清洗后的最终文本)
 
-        参数:
+        Args:
             extracted_content: 被提取原子块的文本内容
             extracted_blocks: 被提取的原子块列表
 
-        返回:
+        Returns:
             (最终文本, 出口链接字典, Token数量)
         """
         restored_content = restore_blocks(extracted_content, extracted_blocks)
@@ -223,7 +223,7 @@ class MarkdownTreeParser:
         """
         递归构建文档子树
 
-        参数:
+        Args:
             parent_id: 父节点ID
             root_doc: 当前文档树的根节点文档
             extracted_blocks: 提取的块内容（代码块、提醒框等）
@@ -314,12 +314,12 @@ class MarkdownTreeParser:
         """
         根据给定的正则表达式列表进行切分与合并
 
-        参数:
+        Args:
             original_content: 原始内容
             patterns: 正则表达式列表，每个模式应该包含捕获组
             extracted_blocks: 提取的块内容
 
-        返回:
+        Returns:
             切分合并后的块列表，每个元素包含：
             - placeholder: 占位符内容（用于进一步处理）
             - content: 恢复后的实际内容
@@ -446,7 +446,6 @@ class MarkdownTreeParser:
                 priority_queue.put((-doc.metadata["level"], doc.id, doc))
 
         nodes_to_remove = set()
-
         while not priority_queue.empty():
             _, _, doc = priority_queue.get()
             # 跳过已删除的节点，处理非叶子节点的子节点合并
@@ -598,10 +597,9 @@ class MarkdownTreeParser:
         for start, end in segments:
             # 获取当前分组的节点
             group_nodes = group[start:end]
-            # 单个节点直接保留
+            # 单个节点直接保留，多个节点合并为新节点
             if len(group_nodes) == 1:
                 merged_nodes.append(group_nodes[0])
-            # 多个节点合并为新节点
             else:
                 merged_nodes.append(MarkdownTreeParser._create_merged_node(group_nodes))
 
@@ -628,16 +626,12 @@ class MarkdownTreeParser:
         lines = content.split('\n')
 
         # 1. 定义核心关键词白名单 (Exact Set)
-        # 包含标准写法、英文写法、以及你发现的文档笔误/变种
+        # 包含标准写法、英文写法、以及发现的文档笔误/变种
         CORE_KEYWORDS = {
-            # 标准中文
-            "HTTP 请求", "参数", "响应",
-            # 标准英文
-            "HTTP Request", "Parameters", "Response",
-            # 常见的简写
-            "HTTP",
-            # 你发现的文档错误/变种 (在此处明确列出，以避免模糊匹配误伤)
-            "HTTP 参数",
+            "HTTP 请求", "参数", "响应",                  # 标准中文
+            "HTTP Request", "Parameters", "Response",   # 标准英文
+            "HTTP",                                     # 常见的简写
+            "HTTP 参数",      # 发现的文档错误/变种 (在此处明确列出，以避免模糊匹配误伤)
         }
 
         # 正则：匹配标题行
@@ -663,16 +657,14 @@ class MarkdownTreeParser:
                 is_keyword = clean_text in CORE_KEYWORDS
 
                 # --- 状态机逻辑 ---
-
                 # 1. 边界检查：遇到同级或更高级标题
                 # 如果是关键词（即使层级错了，如 ### 参数），也不截断（豁免）
-                should_close_block = (current_parent_level > 0 and
-                                      level <= current_parent_level and
-                                      not is_keyword)
+                should_close_block = (
+                        current_parent_level > 0 and level <= current_parent_level and not is_keyword
+                )
 
                 if should_close_block:
-                    # 结算上一块
-                    # 只要命中2个及以上关键词，视为有效 API 块
+                    # 结算上一块，只要命中2个及以上关键词，视为有效 API 块
                     if len(found_keywords) >= 2:
                         for idx in candidate_indices:
                             m = header_pattern.match(processed_lines[idx])
@@ -687,18 +679,14 @@ class MarkdownTreeParser:
 
                 # 2. 块内处理 / 新块开启
                 if current_parent_level == 0:
-                    # 开启新块记录
-                    # 只有非关键词的标题才能作为父标题
+                    # 开启新块记录，只有非关键词的标题才能作为父标题
                     if level >= 2 and not is_keyword:
                         current_parent_level = level
                 else:
                     # 在块内部 (或者是被豁免的同级关键词)
                     if is_keyword:
                         # 归一化：为了统计凑齐了几个要素，我们将所有 HTTP 变种都记为 "HTTP"
-                        if "HTTP" in clean_text:
-                            key_type = "HTTP"
-                        else:
-                            key_type = clean_text
+                        key_type = "HTTP" if "HTTP" in clean_text else clean_text
 
                         found_keywords.add(key_type)
                         candidate_indices.append(i)
@@ -713,8 +701,7 @@ class MarkdownTreeParser:
         # 循环结束后的收尾检查
         if current_parent_level > 0 and len(found_keywords) >= 2:
             for idx in candidate_indices:
-                m = header_pattern.match(processed_lines[idx])
-                if m:
+                if m := header_pattern.match(processed_lines[idx]) :
                     txt = m.group(2).strip()
                     processed_lines[idx] = f"**{txt}**"
 
