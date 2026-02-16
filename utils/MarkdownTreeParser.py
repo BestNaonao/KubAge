@@ -1,7 +1,6 @@
 import os
 import re
 import uuid
-from enum import Enum
 from pathlib import Path
 from queue import PriorityQueue
 from typing import Dict, List, Any, Tuple
@@ -11,19 +10,13 @@ from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface import HuggingFaceEmbeddings
 from transformers import PreTrainedTokenizerBase
 
+from utils.document_schema import NodeType
 from utils.chunker_utils import extract_blocks, restore_blocks, extract_entry_hlink, extract_exit_hlink, merge_outlinks
 
 
 def generate_node_id(title: str) -> str:
     """生成基于标题的唯一节点ID"""
     return str(uuid.uuid5(uuid.NAMESPACE_URL, title))
-
-class NodeType(Enum):
-    EVENT = "dynamic_event"
-    ROOT = "root"
-    SECTION = "section"
-    CONTAINER = "container"
-    LEAF = "leaf"
 
 class MarkdownTreeParser:
     """将Markdown文档解析为树状结构的文档块"""
