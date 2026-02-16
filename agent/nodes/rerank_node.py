@@ -257,6 +257,8 @@ class RerankNode:
         static_docs = []
         for doc in retrieved_docs:
             if doc.metadata.get("node_type") == NodeType.EVENT:
+                # 给动态事件赋予逻辑高分，方便后续统一排序或调试
+                doc.metadata["rerank_score"] = 0.999
                 dynamic_docs.append(doc)
             else:
                 static_docs.append(doc)
