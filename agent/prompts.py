@@ -2,6 +2,8 @@ from typing import List
 
 from langchain_core.documents import Document
 
+from utils import NodeType
+
 RETRIEVAL_PROMPT = """
 5. **检索策略生成**: 将用户的自然语言转化为专业的 K8s 术语，以生成高质量的检索 Query。
    - 你将要检索的知识库是《Kubernetes 官方中文文档》。
@@ -22,10 +24,19 @@ RETRIEVAL_PROMPT = """
   ✅ 正确 (混合): ["Service 连接 Pod 超时", "Service debug 步骤", "Pod 网络不通排查"]
 """
 
-DOC_PROMPT_TEMPLATE = """[Document {index}] 
-Title: {title}
-Content: 
-{content}..."""
+# 普通文档模板
+DOC_PROMPT_TEMPLATE = """【文档 {index}】
+标题: {title}
+内容: 
+{content}
+"""
+
+# 动态事件专用模板
+DYNAMIC_EVENT_TEMPLATE = """【故障现场】
+事件: {title}
+详细日志: {content}
+关联指导: {related_guide}
+"""
 
 def format_docs(docs: List[Document]) -> str:
     """
@@ -35,17 +46,29 @@ def format_docs(docs: List[Document]) -> str:
     if not docs:
         return "No documents retrieved."
 
-    formatted = []
-    current_chars = 0
-    for i, doc in enumerate(docs):
-        doc_content = doc.page_content.strip()
-        doc_title = doc.metadata.get('title', 'Unknown')
-        entry = DOC_PROMPT_TEMPLATE.format(index=i + 1, title=doc_title, content=doc_content)
-        # 内容暂时未做出截断
-        formatted.append(entry)
-        current_chars += len(entry)
+    formatted_entries = []
+    # 1. 排序：强制将 dynamic_event 排在最前面，引起 LLM 注意
+    sorted_docs = sorted(docs, key=lambda d: 0 if d.metadata.get("node_type") == NodeType.EVENT else 1)
 
-    return "\n\n".join(formatted)
+    for i, doc in enumerate(sorted_docs):
+        content = doc.page_content.strip()
+        title = doc.metadata.get('title', 'Unknown')
+
+        if doc.metadata["node_type"] == NodeType.EVENT:
+            # 提取关联信息，告诉 LLM 这个报错对应哪个手册
+            related_guide = "None"
+            for link in doc.metadata.get("related_links", []):
+                if link.get("type") == "static_anchor":
+                    related_guide = link.get("text")
+                    break
+
+            entry = DYNAMIC_EVENT_TEMPLATE.format(title=title, content=content, related_guide=related_guide)
+        else:
+            entry = DOC_PROMPT_TEMPLATE.format(index=i + 1, title=title, content=content)
+
+        formatted_entries.append(entry)
+
+    return "\n\n".join(formatted_entries)
 
 def format_reflections(reflections: list[str]) -> str:
     if reflections:
