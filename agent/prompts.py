@@ -25,17 +25,19 @@ RETRIEVAL_PROMPT = """
 """
 
 # 普通文档模板
-DOC_PROMPT_TEMPLATE = """【文档 {index}】
+DOC_PROMPT_TEMPLATE = """【参考文档 {index}】
 标题: {title}
+来源: {source_desc}
 内容: 
 {content}
 """
 
 # 动态事件专用模板
-DYNAMIC_EVENT_TEMPLATE = """【故障现场】
-事件: {title}
-详细日志: {content}
-关联指导: {related_guide}
+DYNAMIC_EVENT_TEMPLATE = """【故障现场 {index}】
+事件名称: {title}
+关联知识: {related_guide}
+详细日志: 
+{content}
 """
 
 def format_docs(docs: List[Document]) -> str:
@@ -53,6 +55,7 @@ def format_docs(docs: List[Document]) -> str:
     for i, doc in enumerate(sorted_docs):
         content = doc.page_content.strip()
         title = doc.metadata.get('title', 'Unknown')
+        source_desc = doc.metadata.get('source_desc', 'Retrieved Document')
 
         if doc.metadata["node_type"] == NodeType.EVENT:
             # 提取关联信息，告诉 LLM 这个报错对应哪个手册
@@ -62,9 +65,13 @@ def format_docs(docs: List[Document]) -> str:
                     related_guide = link.get("text")
                     break
 
-            entry = DYNAMIC_EVENT_TEMPLATE.format(title=title, content=content, related_guide=related_guide)
+            entry = DYNAMIC_EVENT_TEMPLATE.format(
+                index=i + 1, title=title, related_guide=related_guide, content=content
+            )
         else:
-            entry = DOC_PROMPT_TEMPLATE.format(index=i + 1, title=title, content=content)
+            entry = DOC_PROMPT_TEMPLATE.format(
+                index=i + 1, title=title, source_desc=source_desc, content=content
+            )
 
         formatted_entries.append(entry)
 
