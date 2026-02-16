@@ -115,7 +115,6 @@ class GraphTraverser:
 
             for ancestor_pk in ancestors:
                 parent_doc = doc_lookup.get(ancestor_pk)
-
                 # 检查文档是否存在并且摘要向量是否存在，同时赋值给 summary_vec
                 if not parent_doc or not (summary_vec := parent_doc.metadata.get("summary_vector")):
                     continue
@@ -128,7 +127,7 @@ class GraphTraverser:
                     if ancestor_pk not in existing_pks:     # 达标：加入结果，元数据增强
                         parent_doc.metadata["source_type"] = "parent"
                         parent_doc.metadata["source_desc"] = f"Parent of: '{current_child_text}'"
-
+                        # 记录并扩展
                         existing_pks.add(ancestor_pk)
                         expanded_docs.append(parent_doc)
 
@@ -176,7 +175,6 @@ class GraphTraverser:
                         if target_pk in candidate_map:
                             # 【高阶策略】如果已经存在（说明既是兄弟又是引用），可以合并描述
                             old_desc, old_type = candidate_map[target_pk]
-                            # 例如: "Linked via 'XXX' (also Next step) ..."
                             if "sibling" in old_type:
                                 merged_desc = f"{link_desc} (also {old_desc})"
                                 candidate_map[target_pk] = (merged_desc, "link")
@@ -201,7 +199,6 @@ class GraphTraverser:
         # 注意：这里我们使用 summary_vector 进行相似度计算（通常更轻量且代表性强）
         # 如果 collection 中 vector 是全文向量，summary_vector 是摘要向量，
         # 在做“链接推荐”时，用 Query 匹配 Link 的 Summary 可能比匹配 Full Text 更准。
-
         try:
             # 构造 expr: pk in ["a", "b", ...]。注意 Milvus expr 对 list 长度有限制 (通常 < 16384)，这里通常不会超
             expr = f"pk in {json.dumps(candidate_pks)}"
@@ -224,12 +221,11 @@ class GraphTraverser:
                 for hit in hits:
                     decoded_doc = decode_hit_to_document(hit, content_field="text")
                     pk = decoded_doc.metadata.get("pk")
-                    # 恢复来源上下文
+                    # 恢复来源上下文，注入扩展元数据
                     source_desc, source_type = candidate_map.get(pk, ("Unknown link", "link"))
-                    # 注入扩展元数据
                     decoded_doc.metadata["source_type"] = source_type
                     decoded_doc.metadata["source_desc"] = source_desc
-
+                    # 记录并扩展
                     existing_pks.add(pk)
                     final_docs.append(decoded_doc)
 
@@ -250,12 +246,7 @@ class GraphTraverser:
         try:
             expr = f"pk in {json.dumps(pks)}"   # 构造表达式
             res = self.collection.query(expr, output_fields=HYBRID_SEARCH_FIELDS, partition_names=self.partition_names)
-
-            documents = []
-            for row in res:
-                documents.append(decode_query_result_to_document(row, content_field="text"))
-
-            return documents
+            return [decode_query_result_to_document(row, content_field="text") for row in res]
 
         except Exception as e:
             self.logger.error(f"Milvus batch fetch failed: {e}")
