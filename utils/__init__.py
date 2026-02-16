@@ -8,13 +8,14 @@ from .milvus_adapter import (
     csr_to_milvus_format
 )
 from .MarkdownTreeParser import MarkdownTreeParser, generate_node_id
-from .document_schema import NodeType
+from .document_schema import NodeType, SourceType
 from .chunker_utils import extract_blocks, restore_blocks
 from .html2md_utils import convert_to_markdown
 from .model_factory import get_chat_model, get_dense_embed_model, get_sparse_embed_model
 
 __all__ = [
     "NodeType",
+    "SourceType",
     "MarkdownTreeParser",
     "extract_blocks",
     "restore_blocks",
