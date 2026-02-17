@@ -4,7 +4,7 @@ from typing import List, Dict, Any, TypedDict, Optional
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 
-from agent.nodes import RerankNode
+from agent.nodes.rerank_node import RerankNode
 from agent.schemas import ExecutionPlan, OperationType
 from agent.state import AgentState
 from retriever import MilvusHybridRetriever, GraphTraverser

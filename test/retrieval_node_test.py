@@ -5,8 +5,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.constants import START, END
 from langgraph.graph import StateGraph
 
-from agent.nodes.rerank_node import RerankNode
-from agent.nodes.retrieval_node import RetrievalNode
+from agent.nodes import RerankNode, RetrievalNode
 from agent.schemas import ProblemAnalysis, ExecutionPlan, PlanAction
 # 引入项目模块 (请根据实际路径调整)
 from agent.state import AgentState

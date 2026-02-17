@@ -1,13 +1,11 @@
 from langgraph.graph import StateGraph, START, END
 
 # 引入节点
-from agent.nodes.analysis_node import AnalysisNode
-from agent.nodes.expression_node import ExpressionNode
-from agent.nodes.planning_node import PlanningNode
-from agent.nodes.regulation_node import RegulationNode
-from agent.nodes.retrieval_node import RetrievalNode
-from agent.nodes.sensory_node import SensoryNode
-from agent.nodes.tool_node import ToolCallNode
+from agent.nodes import (
+    AnalysisNode, ExpressionNode, PlanningNode,
+    RegulationNode, RetrievalNode, SensoryNode,
+    ToolCallNode,
+)
 from agent.schemas import NextStep, PlanAction
 from agent.state import AgentState
 
