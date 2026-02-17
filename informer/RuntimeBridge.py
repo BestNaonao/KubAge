@@ -7,10 +7,12 @@ from typing import Any
 
 from kubernetes import client, config, watch
 from kubernetes.client.models import CoreV1Event
+from langchain_huggingface import HuggingFaceEmbeddings
 from pymilvus import Collection, utility
+from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
 from retriever import MilvusHybridRetriever
-from utils import get_sparse_embed_model, get_dense_embed_model, NodeType
+from utils import NodeType
 from utils.milvus_adapter import connect_milvus_by_env, csr_to_milvus_format
 from workflow.build_knowledge_base import STATIC_PARTITION_NAME, DYNAMIC_PARTITION_NAME
 
@@ -29,9 +31,9 @@ class RuntimeBridge:
 
     def __init__(
             self,
+            dense_embedding_func: HuggingFaceEmbeddings,    # 外部传入模型实例
+            sparse_embedding_func: BGEM3EmbeddingFunction,  # 外部传入模型实例
             collection_name="knowledge_base_v3",
-            embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",
-            sparse_model_path="BAAI/bge-m3",
             static_partition_name=STATIC_PARTITION_NAME,
             dynamic_partition_name=DYNAMIC_PARTITION_NAME
     ):
@@ -47,6 +49,9 @@ class RuntimeBridge:
         self._started = False   # 线程状态标记
         self.dedup_cache = {}   # Key: (namespace, name, reason), Value: last_seen_timestamp
         self.dedup_ttl = 10     # 事件风暴去重存活期
+        # 嵌入模型实例
+        self.dense_ef = dense_embedding_func
+        self.sparse_ef = sparse_embedding_func
         # 配置日志
         self.logger = logging.getLogger(type(self).__name__)
         self.logger.setLevel(logging.INFO)
@@ -61,8 +66,6 @@ class RuntimeBridge:
         self._init_k8s()
         # 2. 初始化 Milvus 连接与分区
         self._init_milvus()
-        # 3. 初始化模型 (显存警告：Agent和Bridge若在同机，需注意显存分配)
-        self._init_models(embedding_model_path, sparse_model_path)
 
         # 标记初始化完成
         self._initialized = True
@@ -89,13 +92,6 @@ class RuntimeBridge:
             self.logger.info("Created partition: dynamic_events")
         # 内存加载整个集合
         self.collection.load()
-
-    def _init_models(self, dense_path, sparse_path):
-        """加载嵌入模型(Qwen和BGE-M3)"""
-        self.logger.info("Loading Embedding Models...")
-        self.dense_ef = get_dense_embed_model(dense_path)
-        self.sparse_ef = get_sparse_embed_model(sparse_path)
-        self.logger.info("Models loaded.")
 
     def start(self):
         """启动监听线程和处理线程(幂等性操作)"""
