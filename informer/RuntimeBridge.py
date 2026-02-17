@@ -94,7 +94,7 @@ class RuntimeBridge:
         self.collection.load()
 
     def start(self):
-        """启动监听线程和处理线程(幂等性操作)"""
+        """启动监听线程和处理线程(幂等性操作，防止重复启动线程)"""
         with self._lock:    # 确保线程安全
             if self._started:
                 self.logger.info("RuntimeBridge is already running.")

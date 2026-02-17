@@ -7,13 +7,22 @@ from langchain_core.messages import SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from agent.state import AgentState
+from informer import RuntimeBridge
 
 
 class SensoryNode:
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, informer: RuntimeBridge):
         self.system_info_label = "【用户环境上下文】"
         self.system_info_str = self._get_static_system_info(config_path)
+        # 接收外部注入的 informer
+        self.informer = informer
 
+        # 尝试启动 informer (由于 informer 内部有锁和状态检查，这里调用是安全的)
+        print("🔌 [Sensory]: Ensuring Informer is active...")
+        try:
+            self.informer.start()
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to start Informer: {e}")
 
     def _get_static_system_info(self, config_path) -> str:
         """
@@ -52,8 +61,7 @@ class SensoryNode:
         # 1. 检查是否已经注入过环境信息
         # 我们约定：环境信息作为 SystemMessage 存在，且包含特定的标记
         has_env_context = any(
-            isinstance(m, SystemMessage) and self.system_info_label in m.content
-            for m in messages
+            isinstance(m, SystemMessage) and self.system_info_label in m.content for m in messages
         )
 
         updates = {}
