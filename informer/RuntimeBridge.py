@@ -11,12 +11,22 @@ from pymilvus import Collection, utility
 
 from retriever import MilvusHybridRetriever
 from utils import get_sparse_embed_model, get_dense_embed_model, NodeType
-# 引入项目中的工具函数 (假设 utils.py 在同一目录)
 from utils.milvus_adapter import connect_milvus_by_env, csr_to_milvus_format
 from workflow.build_knowledge_base import STATIC_PARTITION_NAME, DYNAMIC_PARTITION_NAME
 
 
 class RuntimeBridge:
+    # --- 单例模式核心 ---
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            with cls._lock:
+                if not cls._instance:
+                    cls._instance = super(RuntimeBridge, cls).__new__(cls)
+        return cls._instance
+
     def __init__(
             self,
             collection_name="knowledge_base_v3",
@@ -25,30 +35,37 @@ class RuntimeBridge:
             static_partition_name=STATIC_PARTITION_NAME,
             dynamic_partition_name=DYNAMIC_PARTITION_NAME
     ):
+        # 防止重复初始化 (特别是模型加载很慢)
+        if getattr(self, "_initialized", False):
+            return
+
         self.collection_name = collection_name
         self.static_partition = static_partition_name
         self.dynamic_partition = dynamic_partition_name
         self.event_queue = Queue()
-        # 事件风暴去重
-        self.dedup_cache = {}  # Key: (namespace, name, reason), Value: last_seen_timestamp
-        self.dedup_ttl = 10
+        # 控制字段
+        self._started = False   # 线程状态标记
+        self.dedup_cache = {}   # Key: (namespace, name, reason), Value: last_seen_timestamp
+        self.dedup_ttl = 10     # 事件风暴去重存活期
         # 配置日志
         self.logger = logging.getLogger(type(self).__name__)
         self.logger.setLevel(logging.INFO)
-        handler = logging.FileHandler("bridge.log", encoding='utf-8')
-        handler.setLevel(logging.INFO)
-        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        handler.setFormatter(formatter)
-        self.logger.addHandler(handler)
+        if not self.logger.handlers:    # 防止重复添加 Handler
+            handler = logging.FileHandler("bridge.log", encoding='utf-8')
+            handler.setLevel(logging.INFO)
+            formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
 
         # 1. 初始化 K8s 客户端
         self._init_k8s()
-
         # 2. 初始化 Milvus 连接与分区
         self._init_milvus()
-
         # 3. 初始化模型 (显存警告：Agent和Bridge若在同机，需注意显存分配)
         self._init_models(embedding_model_path, sparse_model_path)
+
+        # 标记初始化完成
+        self._initialized = True
 
     def _init_k8s(self):
         try:
@@ -70,9 +87,7 @@ class RuntimeBridge:
         if not self.collection.has_partition(self.dynamic_partition):
             self.collection.create_partition(self.dynamic_partition)
             self.logger.info("Created partition: dynamic_events")
-
-        # 加载集合 (注意：写入时不需要 Load，但我们需要做反向查询，所以必须 Load)
-        # 为了节省内存，可以只 Load 静态分区用于查询，但 Milvus API 通常 Load 整个 Collection
+        # 内存加载整个集合
         self.collection.load()
 
     def _init_models(self, dense_path, sparse_path):
@@ -83,20 +98,21 @@ class RuntimeBridge:
         self.logger.info("Models loaded.")
 
     def start(self):
-        """启动监听线程和处理线程"""
-        # 1. 生产者线程: K8s Event Watcher
-        watcher_thread = threading.Thread(target=self._k8s_event_watcher, daemon=True)
-        watcher_thread.start()
+        """启动监听线程和处理线程(幂等性操作)"""
+        with self._lock:    # 确保线程安全
+            if self._started:
+                self.logger.info("RuntimeBridge is already running.")
+                return
 
-        # 2. 消费者线程: Event Processor (Mapping & Storage)
-        processor_thread = threading.Thread(target=self._event_processor, daemon=True)
-        processor_thread.start()
+            # 1. 生产者线程: K8s Event Watcher
+            watcher_thread = threading.Thread(target=self._k8s_event_watcher, daemon=True)
+            watcher_thread.start()
+            # 2. 消费者线程: Event Processor (Mapping & Storage)
+            processor_thread = threading.Thread(target=self._event_processor, daemon=True)
+            processor_thread.start()
 
-        self.logger.info("Runtime Bridge Started. Press Ctrl+C to exit.")
-        try:
-            while True: time.sleep(1)
-        except KeyboardInterrupt:
-            self.logger.info("Stopping...")
+            self._started = True
+            self.logger.info("RuntimeBridge Started.")
 
     def _is_duplicate(self, event):
         key = (event["namespace"], event["name"], event["reason"])
@@ -107,24 +123,21 @@ class RuntimeBridge:
             if now - last_seen < self.dedup_ttl:
                 return True  # 是重复事件，跳过
 
-        # 更新缓存
+        # 更新缓存和简单清理逻辑：防止内存无限增长（生产环境可用 LRUCache）
         self.dedup_cache[key] = now
-        # 简单清理逻辑：防止内存无限增长（生产环境可用 LRUCache）
         if len(self.dedup_cache) > 1000:
             self.dedup_cache.clear()
         return False
 
     def _k8s_event_watcher(self):
-        """监听 K8s Warning 事件 (Sensory Layer)"""
+        """监听 K8s Warning 事件 (Sensory Layer)，向队列添加任务"""
         w = watch.Watch()
         while True:
             try:
                 self.logger.info("Watching K8s Events...")
                 for event in w.stream(self.v1.list_event_for_all_namespaces):
                     obj: CoreV1Event = event['object']
-                    # 过滤逻辑：只关注 Warning 类型
-                    if obj.type == "Warning":
-                        # 构造中间态数据
+                    if obj.type == "Warning":   # 过滤逻辑：只关注 Warning 类型
                         event_payload = {
                             "kind": "Event",
                             "reason": obj.reason,   # e.g., OOMKilled
@@ -163,7 +176,7 @@ class RuntimeBridge:
         abstract_text = f"故障: {event['reason']}. 日志: {event['message']}"
 
         # B. 具体文本 (用于存储 & Agent检索)
-        # 目的：包含实体名称(payment-service)、Namespace等，以便用户能搜到
+        # 目的：包含实体名称(如payment-service)、Namespace等，以便技术摘要能搜到
         specific_text = (
             f"【运行警报】\n"
             f"Resource: {event['namespace']}/{event['name']}\n"  # <--- 关键：包含实体名
@@ -251,7 +264,6 @@ class RuntimeBridge:
             })
 
         # 构造符合 Schema 的数据条目 (必须与 build_knowledge_base.py 一致)
-        # 不需要字段给默认值
         entry = {
             # 核心字段
             "pk": str(uuid.uuid4()),        # 动态生成 UUID
@@ -284,8 +296,3 @@ class RuntimeBridge:
         # 写入动态分区
         self.collection.insert([entry], partition_name=self.dynamic_partition)  # <--- 关键：指定分区
         self.logger.info(f"Inserted into {self.dynamic_partition} partition.")
-
-
-if __name__ == "__main__":
-    bridge = RuntimeBridge()
-    bridge.start()
