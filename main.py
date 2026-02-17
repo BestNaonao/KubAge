@@ -4,6 +4,7 @@ from langchain_core.messages import HumanMessage
 
 from agent.graph import build_react_agent
 from agent.nodes import RerankNode
+from informer import RuntimeBridge
 from retriever import MilvusHybridRetriever, GraphTraverser
 from utils import get_chat_model, get_dense_embed_model, get_sparse_embed_model
 from utils.mcp_manager import MCPToolManager
@@ -23,25 +24,7 @@ async def main():
     DENSE_MODEL_PATH = "models/Qwen/Qwen3-Embedding-0.6B"
     SPARSE_MODEL_PATH = "BAAI/bge-m3"
     RERANKER_MODEL_PATH = "models/Qwen/Qwen3-Reranker-0.6B"
-    COLLECTION_NAME = "knowledge_base_v2"
-
-    # 1. Dense Embedding
-    dense_embedding = get_dense_embed_model(DENSE_MODEL_PATH)
-
-    # 2. Sparse Embedding
-    sparse_embedding = get_sparse_embed_model(SPARSE_MODEL_PATH)
-
-    # 3. Retriever
-    retriever = MilvusHybridRetriever(
-        collection_name=COLLECTION_NAME,
-        dense_embedding_func=dense_embedding,
-        sparse_embedding_func=sparse_embedding,
-        top_k=5
-    )
-
-    traverser = GraphTraverser(COLLECTION_NAME, partition_names=[STATIC_PARTITION_NAME])
-
-    reranker = RerankNode(RERANKER_MODEL_PATH, 5)
+    COLLECTION_NAME = "knowledge_base_v3"
 
     # 1. 初始化 MCP Manager
     mcp_manager = MCPToolManager.get_instance()
@@ -56,12 +39,14 @@ async def main():
         print("   ❌ 加载MCP工具失败:缺少部分工具！")
         await mcp_manager.close()
         return
+    # 获取工具描述文本
+    tool_str = mcp_manager.get_tools_description()
 
     try:
-        # 获取工具描述文本
-        tool_str = mcp_manager.get_tools_description()
+        # 2. 初始化各个组件 (LLM, Informer, Retriever 等)
+        dense_embedding = get_dense_embed_model(DENSE_MODEL_PATH)
+        sparse_embedding = get_sparse_embed_model(SPARSE_MODEL_PATH)
 
-        # 2. 初始化其他组件 (LLM, Retriever 等)
         llm = get_chat_model(
             temperature=0.1,
             extra_body={
@@ -70,8 +55,32 @@ async def main():
             }
         )
 
+        informer = RuntimeBridge(
+            dense_embedding_func=dense_embedding,
+            sparse_embedding_func=sparse_embedding,
+            collection_name=COLLECTION_NAME,
+        )
+
+        retriever = MilvusHybridRetriever(
+            collection_name=COLLECTION_NAME,
+            dense_embedding_func=dense_embedding,
+            sparse_embedding_func=sparse_embedding,
+            top_k=5
+        )
+
+        traverser = GraphTraverser(COLLECTION_NAME, partition_names=[STATIC_PARTITION_NAME])
+
+        reranker = RerankNode(RERANKER_MODEL_PATH, top_n=5)
+
         # 3. 构建 Agent
-        app = build_react_agent(llm, retriever, traverser, reranker, tool_descriptions=tool_str)
+        app = build_react_agent(
+            llm=llm,
+            informer=informer,
+            retriever=retriever,
+            traverser=traverser,
+            reranker=reranker,
+            tool_descriptions=tool_str,
+        )
 
         print("\n🚀 Agent Initialized. Ready for queries.")
 
