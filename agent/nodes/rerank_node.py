@@ -1,7 +1,7 @@
 from typing import List, Dict, Any
 
 import torch
-import torch.nn.functional as F
+from torch.nn.functional import log_softmax
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -66,63 +66,53 @@ class RerankNode:
         # 针对不同操作类型定制关注点
         self.base_instruct = "Given a technical query about Kubernetes, retrieve relevant documentation passages that provide answers or context."
         self.op_prompt_map = {
-            # 诊断场景：关注错误原因、排查步骤、命令输出解释、日志分析
             OperationType.DIAGNOSIS: (
                 "Given a troubleshooting scenario, retrieve documentation that explains error causes, "
                 "debugging steps, log interpretation, or known issues related to the query. "
                 "Prioritize actionable debugging guides over theoretical concepts. "
                 "General debugging methodologies are acceptable when they clearly apply to the "
                 "same failure category, even if specific resource or entity names are not mentioned."
-            ),
-
-            # 删除/危险操作：关注副作用、级联影响、安全操作命令、恢复方法
+            ),  # 诊断场景：关注错误原因、排查步骤、命令输出解释、日志分析
             OperationType.RESOURCE_DELETION: (
                 "Given a request to delete or remove resources, retrieve documentation that describes "
                 "the deletion command syntax, potential side effects, cascading deletion policies (e.g., ownerReferences), "
                 "and how to safely execute the removal."
-            ),
-
-            # 配置变更：关注 YAML 字段定义、spec 结构、配置项含义、取值范围
+            ),  # 删除/危险操作：关注副作用、级联影响、安全操作命令、恢复方法
             OperationType.CONFIGURE: (
                 "Given a configuration task, retrieve documentation that details the YAML resource definition, "
                 "specific field semantics (under .spec), environment variables, or annotation options required "
                 "to implement the requested configuration."
-            ),
-
-            # 扩缩容：关注 HPA、replicas 字段、资源限制(Limit/Request)、扩展命令
+            ),  # 配置变更：关注 YAML 字段定义、spec 结构、配置项含义、取值范围
             OperationType.SCALING: (
                 "Given a scaling or resource adjustment request, retrieve documentation concerning "
                 "replica settings, HorizontalPodAutoscaler (HPA) configurations, 'kubectl scale' commands, "
                 "or resource requests and limits strategies."
-            ),
-
-            # 知识问答：关注概念定义、架构原理、组件对比 (e.g. Deployment vs StatefulSet)
+            ),  # 扩缩容：关注 HPA、replicas 字段、资源限制(Limit/Request)、扩展命令
             OperationType.KNOWLEDGE_QA: (
                 "Given a conceptual question, retrieve documentation that provides clear definitions, "
                 "architectural overviews, component comparisons, or design principles. "
                 "Prioritize comprehensive explanations over specific command syntax."
-            ),
-
-            # 资源查询：关注 kubectl get/describe 用法、JSONPath、字段含义
+            ),  # 知识问答：关注概念定义、架构原理、组件对比 (e.g. Deployment vs StatefulSet)
             OperationType.RESOURCE_INQUIRY: (
                 "Given a request to query or view resource status, retrieve documentation about "
                 "'kubectl get', 'kubectl describe', output formatting, or the meaning of specific "
                 "status fields and conditions."
-            ),
-
-            # 资源创建：关注 create/apply 命令、最小可用 YAML 示例
+            ),  # 资源查询：关注 kubectl get/describe 用法、JSONPath、字段含义
             OperationType.RESOURCE_CREATION: (
                 "Given a resource creation task, retrieve documentation providing 'kubectl create/apply' examples, "
                 "boilerplate YAML templates, or prerequisites for deploying the specified resource type."
-            )
+            ),  # 资源创建：关注 create/apply 命令、最小可用 YAML 示例
         }
 
         print("✅ Gen-Reranker model loaded.")
 
-    def _format_input_pair(self, instruction: str, query: str, doc: Document) -> str:
+    def _format_input_pair(self, operation_type: OperationType, query: str, doc: Document) -> str:
         """
         构造模型输入：<Instruct> + <Query> + <Document (Title + Content)>
         """
+        # 根据操作类型生成动态指令，提高重排针对性
+        dynamic_instruction = self.op_prompt_map.get(operation_type, self.base_instruct)
+
         # 利用文档元数据中的 Title 增强上下文
         title = doc.metadata.get("title", "Untitled Section")
         content = doc.page_content
@@ -137,7 +127,7 @@ class RerankNode:
         # 拼接增强后的 Document 内容。将 Context 放在 Content 之前，确保模型先看到文档的定位
         enriched_doc = f"[Title]: {title}\n{context_str}\n[Content]: {content}"
 
-        return f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {enriched_doc}"
+        return f"<Instruct>: {dynamic_instruction}\n<Query>: {query}\n<Document>: {enriched_doc}"
 
     def _compute_scores(self, pairs: List[str], token_budget: int = 16384) -> List[float]:
         """
@@ -228,7 +218,7 @@ class RerankNode:
                 false_vec = batch_logits[:, self.token_false_id]
 
                 combined = torch.stack([false_vec, true_vec], dim=1)
-                probs = F.log_softmax(combined, dim=1)
+                probs = log_softmax(combined, dim=1)
                 batch_scores = probs[:, 1].exp().tolist()
 
             # 收集结果
@@ -274,15 +264,8 @@ class RerankNode:
             op_type = analysis.target_operation if analysis else None
             print(f"🎯 Context: {op_type.value if op_type else "Raw Input"} | Query: {query_text[:100]}...")
 
-            # 根据操作类型生成动态指令，提高重排针对性
-            dynamic_instruction = self.op_prompt_map.get(op_type, self.base_instruct)
-            print(f"📋 Instruction: {dynamic_instruction}")
-
             # 准备数据对
-            input_texts = [
-                self._format_input_pair(dynamic_instruction, query_text, doc) for doc in static_docs
-            ]
-
+            input_texts = [self._format_input_pair(op_type, query_text, doc) for doc in static_docs]
             try:
                 # 计算分数
                 scores = self._compute_scores(input_texts)

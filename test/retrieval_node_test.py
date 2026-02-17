@@ -9,7 +9,7 @@ from agent.nodes import RerankNode, RetrievalNode
 from agent.schemas import ProblemAnalysis, ExecutionPlan, PlanAction
 # 引入项目模块 (请根据实际路径调整)
 from agent.state import AgentState
-from retriever.MilvusHybridRetriever import MilvusHybridRetriever
+from retriever import MilvusHybridRetriever
 from test_dataset.retrieval_cases import ALL_RETRIEVAL_SCENARIOS, RetrievalTestScenario
 from utils import get_dense_embed_model, get_sparse_embed_model
 from utils.milvus_adapter import connect_milvus_by_env
