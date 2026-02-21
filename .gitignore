@@ -1,22 +1,4 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+Since the file changes only include `.gitignore` and `README.md` (both source/config files), and there are no build artifacts, dependencies, or temporary files in the changes, the optimized .gitignore should remain empty.
 
-# Logs and temp files
-*.log
-*.tmp
-
-# Environment
-.env
-
-# workspace
-**/workspace
-
-# Others
-/models
-/raw_data*
-/.idea
-/crawler/*.log
-*doc_tree*
+```(empty)
+```
