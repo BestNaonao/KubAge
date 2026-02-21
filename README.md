@@ -1,109 +1,154 @@
 # KubAge - Kubernetes知识库系统
 
-KubAge是一个基于Kubernetes文档构建的知识库系统，支持从爬虫、文档解析到向量存储的完整流程。
+KubAge是一个基于Kubernetes文档构建的智能知识库系统，支持从文档爬取、解析、向量存储到智能问答的完整流程。系统采用现代化的Agent架构，结合混合检索技术和MCP协议，为用户提供专业的Kubernetes运维支持。
 
 ## 项目结构
 
 ```
 /workspace/
-├── crawler/                 # 爬虫模块
+├── crawler/                 # 文档爬虫模块
 │   ├── K8sCrawler.py        # Kubernetes文档爬虫
 │   ├── AsyncDocCrawler.py   # 异步文档爬虫
-│   └── doc_crawler.py       # 通用文档爬虫
+│   ├── doc_crawler.py       # 通用文档爬虫
+│   └── crawler_analysis.py  # 爬虫分析工具
 ├── utils/                   # 工具模块
 │   ├── MarkdownTreeParser.py # Markdown文档树解析器
-│   ├── metadata_utils.py     # 元数据处理工具
-│   ├── chunker_utils.py      # 文档切分工具
-│   ├── html2md_utils.py      # HTML转Markdown工具
-│   └── rag_utils.py          # RAG相关工具
+│   ├── document_schema.py   # 文档数据结构定义
+│   ├── chunker_utils.py     # 文档切分工具
+│   ├── html2md_utils.py     # HTML转Markdown工具
+│   ├── rag_utils.py         # RAG相关工具
+│   ├── milvus_adapter.py    # Milvus适配器
+│   ├── model_factory.py     # 模型工厂
+│   └── mcp_manager.py       # MCP管理器
 ├── workflow/                # 工作流模块
 │   └── build_knowledge_base.py # 知识库构建工作流
 ├── retriever/               # 检索器模块
-│   └── MilvusHybridRetriever.py # Milvus混合检索器
-├── agent/                   # Agent模块
+│   ├── MilvusHybridRetriever.py # Milvus混合检索器
+│   └── GraphTraverser.py    # 图遍历检索器
+├── agent/                   # Agent智能体模块
 │   ├── nodes/               # Agent节点
+│   │   ├── sensory_node.py     # 感知节点
 │   │   ├── analysis_node.py    # 问题分析节点
+│   │   ├── planning_node.py    # 规划节点
 │   │   ├── retrieval_node.py   # 文档检索节点
-│   │   └── rerank_node.py      # 文档重排序节点
+│   │   ├── tool_node.py        # 工具调用节点
+│   │   ├── regulation_node.py  # 自我调节节点
+│   │   ├── expression_node.py  # 表达节点
+│   │   └── rerank_node.py      # 重排序节点
 │   ├── graph.py             # Agent工作流图
 │   ├── state.py             # Agent状态定义
 │   ├── schemas.py           # 数据结构定义
 │   └── prompts.py           # Prompt模板
-├── config/                  # 配置模块
-│   └── mcp_config.json      # MCP服务配置
+├── informer/                # 信息桥接模块
+│   └── RuntimeBridge.py     # 运行时桥接器
 ├── os_mcp/                  # 操作系统MCP服务
 │   └── os_mcp_server.py     # MCP服务器实现
+├── config/                  # 配置模块
+│   └── mcp_config.json      # MCP服务配置
+├── init-scripts/            # 初始化脚本
+│   └── 001-enable-pgvector.sql # PostgreSQL向量扩展初始化脚本
 ├── test/                    # 测试模块
-│   ├── build_kb_test.py     # 知识库构建测试
-│   └── retrieving_test.py   # 检索功能测试
-├── requirements.txt         # 依赖包列表
-└── README.md               # 本说明文档
+│   ├── agent_node_test.py      # Agent节点测试
+│   ├── build_kb_test.py        # 知识库构建测试
+│   ├── milvus_test.py          # Milvus测试
+│   ├── mcp_client_test.py      # MCP客户端测试
+│   ├── torch_test.py           # PyTorch测试
+│   ├── re_test.py              # 正则表达式测试
+│   ├── retrieval_node_test.py  # 检索节点测试
+│   ├── retrieving_test.py      # 检索功能测试
+│   ├── visualize_test.py       # 可视化测试
+│   ├── flash-attn_test.py      # Flash Attention测试
+│   └── preprocess_api_blocks_test.py # API块预处理测试
+├── docker-compose-milvus.yaml # Milvus Docker Compose配置
+├── docker-compose-pg.yaml     # PostgreSQL Docker Compose配置
+├── main.py                    # 主程序入口
+├── baseline.py                # 基线测试程序
+├── init_postgres.py           # PostgreSQL初始化脚本
+├── milvus_build.bat           # Milvus构建批处理脚本
+├── milvus_clean.bat           # Milvus清理批处理脚本
+├── pg_build.bat               # PostgreSQL构建批处理脚本
+├── pg_clean.bat               # PostgreSQL清理批处理脚本
+├── requirements.txt           # 依赖包列表
+└── README.md                  # 本说明文档
 ```
 
-## 功能流程
+## 核心功能模块
 
-### 1. 爬虫阶段
-- **目标**: 从Kubernetes官方文档网站抓取内容
-- **工具**: `crawler/K8sCrawler.py`
-- **功能**:
-  - 异步爬取Kubernetes文档页面
-  - 解析HTML内容并转换为Markdown格式
-  - 保存为本地`.md`文件
-  - 智能去重和错误处理
+### 1. 爬虫模块 (crawler/)
+- **K8sCrawler**: 专门针对Kubernetes文档的异步爬虫
+- **AsyncDocCrawler**: 通用异步文档爬虫框架
+- **doc_crawler**: 基础文档爬虫实现
+- **crawler_analysis**: 爬虫数据分析工具
 
-### 2. Markdown文档存储
-- **格式**: Markdown文件（`.md`）
-- **路径**: 默认存储在`../raw_data`目录
-- **结构**: 按照原始文档结构组织
+### 2. 工具模块 (utils/)
+- **MarkdownTreeParser**: 将Markdown文档解析为树状结构，支持智能切分和元数据提取
+- **document_schema**: 定义文档数据结构和模式
+- **chunker_utils**: 文档块切分工具，保持语义完整性
+- **html2md_utils**: HTML到Markdown的转换工具
+- **rag_utils**: RAG（检索增强生成）相关实用工具
+- **milvus_adapter**: Milvus数据库操作适配器
+- **model_factory**: LLM和嵌入模型工厂
+- **mcp_manager**: Model Context Protocol管理器
 
-### 3. 解析Markdown文档
-- **工具**: `utils/MarkdownTreeParser.py`
-- **功能**:
-  - 将Markdown文档解析为树状结构
-  - 智能切分文档块，保持语义完整性
-  - 提取文档元数据（标题、层级、父子关系等）
-  - 处理代码块、表格等特殊内容
+### 3. 工作流模块 (workflow/)
+- **build_knowledge_base**: 知识库构建工作流，包括文档解析、向量化和存储
 
-### 4. 保存到Milvus
-- **工具**: `workflow/build_knowledge_base.py`
-- **功能**:
-  - 使用密集向量（Qwen）和稀疏向量（BGE-M3）生成双重嵌入表示
-  - 将文档数据存储到Milvus向量数据库
-  - 支持批量处理和错误恢复
+### 4. 检索器模块 (retriever/)
+- **MilvusHybridRetriever**: 支持密集向量、稀疏向量和标题向量的混合检索器
+- **GraphTraverser**: 图遍历检索器，支持基于文档结构的检索
 
-### 5. Agent问题分析
-- **工具**: `agent/nodes/analysis_node.py`
-- **功能**:
-  - 理解用户的Kubernetes运维问题
-  - 提取关键实体（Pod名称、Namespace等）
-  - 识别操作类型和风险等级
-  - 生成优化的检索Query
+### 5. Agent智能体模块 (agent/)
+- **nodes/**: 包含7个核心节点，实现完整的ReAct工作流
+  - **sensory_node**: 感知节点，接收用户输入并注入环境上下文
+  - **analysis_node**: 分析节点，理解用户意图、提取实体、评估风险
+  - **planning_node**: 规划节点，制定执行计划
+  - **retrieval_node**: 检索节点，从知识库检索相关信息
+  - **tool_node**: 工具节点，调用MCP工具执行系统操作
+  - **regulation_node**: 自我调节节点，评估执行结果并决定下一步
+  - **expression_node**: 表达节点，生成最终用户响应
+  - **rerank_node**: 重排序节点，使用专用模型对检索结果进行重排序
+- **graph**: Agent工作流图定义
+- **state**: Agent状态管理
+- **schemas**: 数据结构定义
+- **prompts**: 动态提示词模板
 
-### 6. 混合检索
-- **工具**: `retriever/MilvusHybridRetriever.py` + `agent/nodes/retrieval_node.py`
-- **功能**:
-  - 基于密集向量进行语义检索
-  - 基于稀疏向量进行关键词匹配
-  - 基于标题稀疏向量进行标题匹配
-  - 使用RRF算法融合多路检索结果
+### 6. 信息桥接模块 (informer/)
+- **RuntimeBridge**: 运行时桥接器，连接不同组件和外部服务
 
-### 7. 文档重排序
-- **工具**: `agent/nodes/rerank_node.py`
-- **功能**:
-  - 使用Qwen3-Reranker模型对检索结果重新排序
-  - 根据操作类型生成动态排序指令
-  - 提高最终结果的相关性和准确性
+### 7. 操作系统MCP服务 (os_mcp/)
+- **os_mcp_server**: 基于MCP协议的系统操作服务，提供安全的命令执行和文件操作
 
-### 8. 命令执行（通过os_mcp）
-- **工具**: `os_mcp/os_mcp_server.py`
-- **功能**:
-  - 提供MCP（Model Context Protocol）服务接口
-  - 支持在安全沙箱环境中执行系统命令
-  - 支持文件读写操作
-  - 支持环境变量管理
-  - 为Agent提供与操作系统交互的能力
+### 8. 配置和测试模块
+- **config/**: MCP服务配置
+- **test/**: 全面的单元测试和集成测试套件
 
-## 数据库结构
+## 系统架构特色
+
+### 1. 混合检索技术
+系统采用三路混合检索：
+- **密集向量检索**: 基于语义相似性的向量检索
+- **稀疏向量检索**: 基于关键词匹配的检索
+- **标题向量检索**: 专门针对标题的稀疏向量检索
+- **RRF融合**: 使用倒数排名融合算法整合多路检索结果
+
+### 2. ReAct智能Agent
+实现完整的ReAct（Reasoning and Acting）模式：
+- **Reasoning**: 通过分析和规划节点进行深度推理
+- **Acting**: 通过检索和工具调用节点执行具体操作
+- **Self-Regulation**: 自我评估和调节机制
+- **Adaptive Flow**: 根据评估结果动态调整执行路径
+
+### 3. MCP协议集成
+- 支持Model Context Protocol，允许AI模型与外部工具安全交互
+- 提供命令执行、文件操作、系统信息查询等功能
+- 实现沙箱安全机制，限制操作范围
+
+### 4. 文档结构化处理
+- Markdown树状解析，保留文档层次结构
+- 智能切分算法，保持语义完整性
+- 丰富的元数据提取，支持结构化查询
+
+## 数据库设计
 
 Milvus知识库采用混合检索方案，包含以下字段：
 
@@ -111,14 +156,15 @@ Milvus知识库采用混合检索方案，包含以下字段：
 |--------|----------|------|
 | pk | VarChar | 主键 |
 | text | VarChar | 文档文本内容 |
-| vector | FloatVector | 文本的密集向量表示（Qwen生成） |
+| vector | FloatVector | 文本的稠密向量表示（Qwen生成） |
+| summary_vector | FloatVector | 摘要语义向量（Qwen生成） |
 | sparse_vector | SparseFloatVector | 文本的稀疏向量表示（BGE-M3生成） |
 | title_sparse | SparseFloatVector | 标题的稀疏向量表示（BGE-M3生成） |
 | source | VarChar | 源文件路径 |
 | title | VarChar | 节点标题 |
 | parent_id | VarChar | 父节点ID |
-| child_ids | VarChar | 子节点ID列表（JSON格式） |
-| node_type | VarChar | 节点类型（ROOT、SECTION、CONTAINER、LEAF） |
+| child_ids | Array[VarChar] | 子节点列表（最大容量256） |
+| node_type | VarChar | 节点类型 |
 | level | Int64 | 节点层级 |
 | token_count | Int64 | token数量 |
 | left_sibling | VarChar | 左兄弟节点ID |
@@ -127,12 +173,16 @@ Milvus知识库采用混合检索方案，包含以下字段：
 | merged | Bool | 是否合并节点 |
 | nav_next_step | VarChar | "接下来"章节内容 |
 | nav_see_also | VarChar | "另请参见"章节内容 |
+| entry_urls | Array[VarChar] | 超链接入口列表（最大容量200） |
+| related_links | JSON | 解析后的关联链路 |
+| summary | VarChar | 摘要 |
 
-### 索引信息
+### 索引配置
 
 | 索引名称 | 索引类型 | 索引参数 |
 |----------|----------|----------|
 | vector | FLAT/HNSW | 根据配置决定，metric_type: COSINE |
+| summary_vector | FLAT/HNSW | 根据配置决定，metric_type: COSINE |
 | sparse_vector | SPARSE_INVERTED_INDEX | metric_type: IP, drop_ratio_build: 0.2 |
 | title_sparse | SPARSE_INVERTED_INDEX | metric_type: IP, drop_ratio_build: 0.2 |
 | pk | 自动 | 主键索引 |
@@ -141,56 +191,30 @@ Milvus知识库采用混合检索方案，包含以下字段：
 | level | 二级索引 | 用于按层级筛选 |
 | title | 二级索引 | 用于标题搜索 |
 
-## 检索器介绍
+## 安装与部署
 
-### MilvusHybridRetriever
-- **位置**: `retriever/MilvusHybridRetriever.py`
-- **功能**:
-  - 支持密集向量检索（语义相似性）
-  - 支持稀疏向量检索（关键词匹配）
-  - 支持标题稀疏向量检索（标题匹配）
-  - 使用RRF（Reciprocal Rank Fusion）算法融合多路检索结果
-- **特点**: 结合了语义检索和关键词检索的优势，提高了检索准确性
-
-### 检索流程
-1. 输入查询文本
-2. 使用Qwen模型生成密集查询向量
-3. 使用BGE-M3模型生成稀疏查询向量
-4. 执行三路检索（文本密集+文本稀疏+标题稀疏）
-5. 使用RRF算法融合检索结果
-6. 返回融合后的排序结果
-
-## 工作流说明
-
-### 构建知识库工作流
-- **位置**: `workflow/build_knowledge_base.py`
-- **功能**:
-  - 连接Milvus数据库
-  - 初始化密集和稀疏嵌入模型
-  - 解析Markdown文档为树状结构
-  - 生成密集和稀疏向量
-  - 批量存入Milvus数据库
-  - 创建相应索引
-  - 加载集合供查询使用
-
-### 工作流执行步骤
-1. **连接数据库**: 建立与Milvus的连接
-2. **加载模型**: 初始化Qwen（密集）和BGE-M3（稀疏）嵌入模型
-3. **创建Schema**: 定义支持混合检索的数据表结构
-4. **解析文档**: 使用MarkdownTreeParser解析文档
-5. **生成向量**: 为每份文档生成密集和稀疏向量
-6. **批量存储**: 按token数量分批存入Milvus
-7. **创建索引**: 为各种向量字段创建相应索引
-8. **加载集合**: 将集合加载到内存中供查询使用
-
-## 使用方法
+### 环境要求
+- Python 3.8+
+- Docker & Docker Compose
+- Milvus向量数据库
+- PostgreSQL (可选)
 
 ### 1. 环境准备
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 爬取文档
+### 2. 启动Milvus数据库
+```bash
+docker-compose -f docker-compose-milvus.yaml up -d
+```
+
+### 3. 启动PostgreSQL (如需要)
+```bash
+docker-compose -f docker-compose-pg.yaml up -d
+```
+
+### 4. 爬取文档
 ```python
 from crawler.K8sCrawler import K8sCrawler
 
@@ -200,7 +224,7 @@ crawler = K8sCrawler(num_workers=5, save_dir="../raw_data")
 crawler.run()
 ```
 
-### 3. 构建知识库
+### 5. 构建知识库
 ```python
 from workflow.build_knowledge_base import build_knowledge_base
 
@@ -234,14 +258,6 @@ build_knowledge_base(
 | milvus_password | 从环境变量读取 | Milvus密码 |
 | index_type | "FLAT" | 索引类型 |
 | metric_type | "COSINE" | 度量类型 |
-
-### 4. 使用检索器
-```python
-from test.retrieving_test import main
-
-# 运行检索测试
-main()
-```
 
 ## 配置文件
 
@@ -306,99 +322,128 @@ build_knowledge_base(
 )
 ```
 
-## OS MCP服务 (os_mcp)
+## 使用示例
 
-### 概述
-
-`os_mcp`是基于MCP（Model Context Protocol）协议实现的操作系统工具服务，为Agent提供与操作系统安全交互的能力。该服务运行在受限的沙箱环境中，确保命令执行的安全性。
-
-### 服务架构
-
-- **位置**: `os_mcp/os_mcp_server.py`
-- **协议**: 基于FastMCP实现的MCP服务器
-- **沙箱**: 所有文件操作限制在`./workspace`目录内
-- **异步**: 使用asyncio实现异步命令执行
-
-### 核心功能
-
-#### 1. 命令执行 (execute_command)
+### 运行Agent
 ```python
-execute_command(command: str, timeout: int = 60)
-```
-- 异步执行系统shell命令
-- 支持超时控制（默认60秒）
-- 自动处理stdout/stderr输出
-- 返回退出码和完整输出信息
-- **安全限制**: 不支持管道(|)和重定向(>)操作
+from agent.graph import build_react_agent
+from utils.model_factory import get_chat_model
+from retriever.MilvusHybridRetriever import MilvusHybridRetriever
 
-#### 2. 文件读取 (read_file)
+# 初始化组件
+llm = get_chat_model()
+retriever = MilvusHybridRetriever.from_existing_index(
+    collection_name="knowledge_base_v2",
+    embedding_field="vector",
+    sparse_embedding_field="sparse_vector",
+    title_sparse_field="title_sparse"
+)
+
+# 构建Agent
+app = build_react_agent(llm, retriever)
+
+# 运行查询
+result = app.invoke({
+    "messages": [("user", "我的Pod一直处于Pending状态，请帮我诊断问题")]
+})
+```
+
+### 使用检索器
 ```python
-read_file(path: str)
+from test.retrieving_test import main
+
+# 运行检索测试
+main()
 ```
-- 读取工作空间内的文件内容
-- 自动检测文件编码（UTF-8、GBK、Latin-1）
-- 路径必须在允许的工作空间范围内
 
-#### 3. 文件写入 (write_file)
-```python
-write_file(path: str, content: str)
-```
-- 写入内容到工作空间文件
-- 自动创建不存在的目录
-- 覆盖已存在的文件
+## Agent架构详解
 
-#### 4. 系统信息获取 (get_system_info)
-```python
-get_system_info()
-```
-- 返回操作系统类型、版本、架构等信息
-- 提供工作空间绝对路径
-- 用于环境兼容性检查
+### Agent ReAct模式
 
-#### 5. 环境变量管理 (append_environment_variable)
-```python
-append_environment_variable(key: str, value: str)
-```
-- 将环境变量追加到`.env`文件
-- 持久化保存配置信息
+Agent采用经典的ReAct（Reasoning and Acting）模式，结合了推理（Reasoning）和行动（Acting）两个核心能力：
+- **Reasoning**: 通过分析节点和规划节点进行深度思维链推理
+- **Acting**: 通过检索、工具调用等节点执行具体操作
+- **Self-Regulation**: 通过自我调节节点评估执行结果并决定下一步行动
+- **Adaptive Flow**: 支持根据评估结果动态调整执行路径，形成闭环反馈机制
 
-### 安全特性
+### Agent状态结构 (AgentState)
 
-1. **路径验证**: 所有文件操作都经过严格的路径验证，禁止访问工作空间外的文件
-2. **命令沙箱**: 使用shlex解析命令，防止命令注入攻击
-3. **超时保护**: 所有命令执行都有超时限制，防止进程挂起
-4. **错误隔离': 单个操作失败不会影响整个服务
+Agent使用TypedDict定义状态结构，包含以下字段：
 
-### 使用场景
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| messages | Annotated[List[BaseMessage], operator.add] | 消息历史记录，使用operator.add实现追加模式 |
+| analysis | ProblemAnalysis \| None | 存储问题分析结果 |
+| plan | ExecutionPlan \| None | 存储当前执行计划 |
+| retrieved_docs | List[Document] \| None | 检索到的文档片段 |
+| retrieval_attempts | int | 检索尝试次数，用于熔断机制 |
+| tool_output | str \| None | 工具执行输出结果 |
+| evaluation | SelfEvaluation \| None | 自我评估结果 |
+| error | str \| None | 错误信息 |
+| metadata | Dict[str, Any] \| None | 元数据信息 |
 
-- **Kubernetes运维**: 执行kubectl命令查看集群状态
-- **配置管理**: 读写YAML/JSON配置文件
-- **日志分析**: 读取和分析容器日志
-- **脚本执行**: 运行诊断和修复脚本
+### Agent节点功能
 
-## 数据处理流程
+#### 1. Sensory Node（感知节点）
+- 接收用户输入，注入环境上下文信息
+- 获取系统信息（操作系统、架构、工作空间路径等）
 
-### 知识库构建流程
+#### 2. Analysis Node（分析节点）
+- 深度分析用户输入，提取关键信息
+- 进行上下文消歧、实体提取、意图识别和风险评估
+- 生成技术摘要和检索Query列表
 
-1. **爬虫阶段**: 从Kubernetes官网爬取HTML文档
-2. **格式转换**: 将HTML转换为Markdown格式
-3. **文档解析**: 解析Markdown为树状结构
-4. **内容切分**: 按语义和大小切分文档块
-5. **密集向量化**: 使用Qwen模型生成密集向量表示
-6. **稀疏向量化**: 使用BGE-M3模型生成稀疏向量表示
-7. **存储**: 将向量和元数据存储到Milvus
-8. **索引**: 为向量和元数据建立索引
+#### 3. Planning Node（规划节点）
+- 基于分析结果制定执行计划
+- 支持三种行动类型：RETRIEVE（检索）、TOOL_USE（工具调用）、DIRECT_ANSWER（直接回答）
+- 实现检索次数熔断机制，防止无限循环
 
-### 智能问答流程
+#### 4. Retrieval Node（检索节点）
+- 基于规划节点的搜索查询，从Milvus知识库中检索相关文档
+- 对检索结果进行去重处理
+- 调用重排序节点对结果进行精排
 
-1. **问题输入**: 用户提出Kubernetes运维相关问题
-2. **Agent分析**: 分析问题意图、提取实体、评估风险、生成检索Query
-3. **混合检索**: 使用密集向量、稀疏向量和标题向量进行三路检索
-4. **结果融合**: 使用RRF算法融合多路检索结果
-5. **文档重排**: 使用Reranker模型对结果重新排序
-6. **答案生成**: 基于检索到的知识生成回答
-7. **命令执行**: 通过os_mcp服务执行必要的kubectl命令或系统操作
-8. **结果反馈**: 将执行结果返回给用户
+#### 5. ToolCall Node（工具调用节点）
+- 执行MCP注册的工具函数
+- 处理命令执行、文件操作等系统级任务
+
+#### 6. Regulation Node（自我调节节点）
+- 评估执行结果质量并决定下一步流向
+- 根据评估结果决定是否返回分析、规划、检索、工具调用或表达
+
+#### 7. Expression Node（表达节点）
+- 生成最终的用户响应
+- 根据评估结果决定是否返回反馈信息
+
+### 数据Schema定义
+
+#### 问题分析Schema (ProblemAnalysis)
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| reasoning | str | 思维链推理过程：上下文消歧、意图分析、信息提取、风险判断 |
+| entities | List[NamedEntity] | 提取的关键命名实体列表 |
+| target_operation | OperationType | 目标操作类型 |
+| technical_summary | str | 用户问题的技术摘要，去除口语化表达 |
+| risk_level | RiskLevel | 操作风险等级 |
+| clarification_question | str \| None | 如果信息不足需要追问的问题 |
+
+#### 执行计划Schema (ExecutionPlan)
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| reasoning | str | 规划的理由，为什么选择这个动作 |
+| action | PlanAction | 下一步的具体动作类型 |
+| search_queries | List[str] \| None | 检索时使用的查询列表 |
+| tool_name | str \| None | 工具调用时的工具名称 |
+| tool_args | Dict[str, Any] \| None | 工具调用时的参数 |
+| final_answer | str \| None | 直接回答时的内容 |
+
+#### 自我评估Schema (SelfEvaluation)
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| reasoning | str | 评估理由 |
+| status | EvaluatedStatus | 当前步骤执行结果的评估状态 |
+| next_step | NextStep | 决定回退到哪一步或继续前进 |
+| feedback | str | 反馈给下一步骤的改进建议或错误信息 |
 
 ## Agent架构
 
