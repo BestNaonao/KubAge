@@ -3,9 +3,11 @@ import threading
 import time
 import traceback
 import uuid
+from datetime import datetime, timezone
 from queue import Queue
 from typing import Any
 
+from cachetools import TTLCache
 from kubernetes import client, config, watch
 from kubernetes.client.models import CoreV1Event
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -47,9 +49,8 @@ class RuntimeBridge:
         self.event_queue = Queue()          # 事件队列
         self.resource_queue = Queue()       # 资源队列
         # 控制字段
-        self._started = False   # 线程状态标记
-        self.dedup_cache = {}   # Key: (namespace, name, reason), Value: last_seen_timestamp
-        self.dedup_ttl = 10     # 事件风暴去重存活期
+        self._started = False               # 线程状态标记
+        self.dedup_cache = TTLCache(maxsize=5000, ttl=60)   # 事件风暴去重缓存
         # 嵌入模型实例
         self.dense_ef = dense_embedding_func
         self.sparse_ef = sparse_embedding_func
@@ -112,46 +113,59 @@ class RuntimeBridge:
             self._started = True
             self.logger.info("RuntimeBridge Started.")
 
-    def _is_duplicate(self, event):
-        key = (event["namespace"], event["name"], event["reason"])
-        now = time.time()
-
-        if key in self.dedup_cache:
-            last_seen = self.dedup_cache[key]
-            if now - last_seen < self.dedup_ttl:
-                return True  # 是重复事件，跳过
-
-        # 更新缓存和简单清理逻辑：防止内存无限增长（生产环境可用 LRUCache）
-        self.dedup_cache[key] = now
-        if len(self.dedup_cache) > 1000:
-            self.dedup_cache.clear()
-        return False
-
     def _k8s_event_watcher(self):
         """监听 K8s Warning 事件 (Sensory Layer)，向队列添加任务"""
         w = watch.Watch()
+        resource_version = ""
         while True:
             try:
                 self.logger.info("Watching K8s Events...")
-                for event in w.stream(self.core_v1.list_event_for_all_namespaces):
-                    obj: CoreV1Event = event['object']
-                    if obj.type == "Warning":   # 过滤逻辑：只关注 Warning 类型
-                        event_payload = {
-                            "kind": "Event",
-                            "reason": obj.reason,   # e.g., OOMKilled
-                            "message": obj.message,     # 详细日志
-                            "namespace": obj.metadata.namespace,
-                            "name": obj.involved_object.name,
-                            "obj_kind": obj.involved_object.kind,
-                            "timestamp": str(obj.last_timestamp)
-                        }
-                        if self._is_duplicate(event_payload):
-                            self.logger.debug(f"Skipping duplicate event: {obj.reason}")
-                            continue
-                        self.event_queue.put(event_payload)
+                kwargs = {"timeout_seconds": 90, "resource_version": resource_version} if resource_version \
+                    else {"timeout_seconds": 90}
+                for event in w.stream(self.core_v1.list_event_for_all_namespaces, **kwargs):
+                    obj: CoreV1Event = event["object"]
+                    resource_version = obj.metadata.resource_version
+                    if obj.type != "Warning":   # 过滤逻辑：只关注 Warning 类型
+                        continue
+
+                    dt = obj.event_time or obj.last_timestamp or obj.first_timestamp or obj.metadata.creation_timestamp
+                    dt = dt.replace(tzinfo=timezone.utc) if isinstance(dt, datetime) else datetime.now(timezone.utc)
+
+                    key = (
+                        obj.metadata.namespace, obj.involved_object.kind, obj.involved_object.name,
+                        obj.reason, obj.message[:50],
+                    )
+
+                    # TTLCache 自动完成风暴去重、过期和清理
+                    if key in self.dedup_cache:
+                        self.logger.debug(f"Skipping duplicate event: {obj.reason}")
+                        continue
+                    self.dedup_cache[key] = True
+
+                    event_payload = {
+                        "kind": "Event",
+                        "reason": obj.reason,   # e.g., OOMKilled
+                        "message": obj.message,     # 详细日志
+                        "namespace": obj.metadata.namespace,
+                        "name": obj.involved_object.name,
+                        "obj_kind": obj.involved_object.kind,
+                        "timestamp_str": dt.isoformat(),
+                        "timestamp": int(dt.timestamp()),
+                    }
+                    self.event_queue.put(event_payload)
+
+            except client.ApiException as e:
+                if e.status == 410:
+                    self.logger.warning("Watch expired (410). Relisting from latest.")
+                    resource_version = ""
+                    continue
+                else:
+                    self.logger.error(f"K8s API error: {e}")
+                    time.sleep(3)
+
             except Exception as e:
-                self.logger.error(f"Watcher Error: {e}")
-                time.sleep(5)
+                self.logger.error(f"Unexpected watcher error: {e}")
+                time.sleep(3)
 
     def _event_processor(self):
         """处理队列中的事件 (Mapping & Storage Layer)"""
@@ -180,7 +194,7 @@ class RuntimeBridge:
             f"Resource: {event['namespace']}/{event['name']}\n"  # <--- 关键：包含实体名
             f"Reason: {event['reason']}\n"
             f"Message: {event['message']}\n"
-            f"Time: {event['timestamp']}"
+            f"Time: {event['timestamp_str']}"
         )
 
         # 2. 实体映射 (Entity Mapping / Reverse Instantiation)
@@ -191,7 +205,7 @@ class RuntimeBridge:
         # 3. 面向存储的向量化 (Storage-oriented Vectorization)
         # A. 稠密向量 (Dense Vector)
         storage_dense_vec = self.dense_ef.embed_documents([specific_text])[0]
-        summary_dense_vec = self.dense_ef.embed_query(abstract_text)
+        summary_dense_vec = self.dense_ef.embed_documents([abstract_text])[0]
 
         # B. 稀疏向量 (Sparse Vector)
         storage_sparse_result = self.sparse_ef.encode_documents([specific_text])["sparse"]
@@ -275,6 +289,7 @@ class RuntimeBridge:
             # 元数据与动静关联
             "source": "k8s_informer",           # 数据源标记
             "title": f"Runtime Alert: {event['reason']} - {event['name']}",
+            "timestamp": event["timestamp"],
             "node_type": NodeType.EVENT.value,       # 节点类型标记 (Agent根据此字段判断是否高亮)
             "related_links": related_links,     # JSON 格式的关联链路
             "parent_id": anchor['pk'] if anchor else "",    # 逻辑上的父节点指向静态手册
