@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+import traceback
 import uuid
 from queue import Queue
 from typing import Any
@@ -11,7 +12,6 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from pymilvus import Collection, utility
 from pymilvus.model.hybrid import BGEM3EmbeddingFunction
 
-from retriever import MilvusHybridRetriever
 from utils import NodeType
 from utils.milvus_adapter import connect_milvus_by_env, csr_to_milvus_format
 from workflow.build_knowledge_base import STATIC_PARTITION_NAME, DYNAMIC_PARTITION_NAME
@@ -44,7 +44,8 @@ class RuntimeBridge:
         self.collection_name = collection_name
         self.static_partition = static_partition_name
         self.dynamic_partition = dynamic_partition_name
-        self.event_queue = Queue()
+        self.event_queue = Queue()          # 事件队列
+        self.resource_queue = Queue()       # 资源队列
         # 控制字段
         self._started = False   # 线程状态标记
         self.dedup_cache = {}   # Key: (namespace, name, reason), Value: last_seen_timestamp
@@ -77,7 +78,8 @@ class RuntimeBridge:
         except config.ConfigException:
             config.load_kube_config()
             self.logger.info("Loaded kube-config.")
-        self.v1 = client.CoreV1Api()
+        self.app_v1 = client.AppsV1Api()
+        self.core_v1 = client.CoreV1Api()
 
     def _init_milvus(self):
         connect_milvus_by_env()
@@ -131,7 +133,7 @@ class RuntimeBridge:
         while True:
             try:
                 self.logger.info("Watching K8s Events...")
-                for event in w.stream(self.v1.list_event_for_all_namespaces):
+                for event in w.stream(self.core_v1.list_event_for_all_namespaces):
                     obj: CoreV1Event = event['object']
                     if obj.type == "Warning":   # 过滤逻辑：只关注 Warning 类型
                         event_payload = {
@@ -158,7 +160,7 @@ class RuntimeBridge:
             try:
                 self._process_single_event(event_data)
             except Exception as e:
-                self.logger.error(f"Processing Error: {e}")
+                self.logger.error(f"Processing Error: {e}\n{traceback.format_exc()}")
             finally:
                 self.event_queue.task_done()
 
@@ -208,7 +210,7 @@ class RuntimeBridge:
 
     def _find_static_anchor(self, sparse_vec: list[float]):
         """在 static_knowledge 分区搜索最相关的排查文档"""
-        search_params = MilvusHybridRetriever.sparse_search_params
+        search_params = {"metric_type": "IP", "params": {"drop_ratio_search": 0.2}}
 
         # 只在静态分区搜索
         results = self.collection.search(
