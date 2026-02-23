@@ -113,7 +113,7 @@ KubAge是一个基于Kubernetes文档构建的智能知识库系统，支持从�
 - **prompts**: 动态提示词模板
 
 ### 6. 信息桥接模块 (informer/)
-- **RuntimeBridge**: 运行时桥接器，连接不同组件和外部服务
+- **RuntimeBridge**: 运行时桥接器，感知动态集群信息，捕捉资源变动和事件流
 
 ### 7. 操作系统MCP服务 (os_mcp/)
 - **os_mcp_server**: 基于MCP协议的系统操作服务，提供安全的命令执行和文件操作
@@ -176,6 +176,7 @@ Milvus知识库采用混合检索方案，包含以下字段：
 | entry_urls | Array[VarChar] | 超链接入口列表（最大容量200） |
 | related_links | JSON | 解析后的关联链路 |
 | summary | VarChar | 摘要 |
+| timestamp | Int64 | 时间戳 |
 
 ### 索引配置
 
@@ -233,31 +234,29 @@ build_knowledge_base(
     embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",
     sparse_model_path="BAAI/bge-m3",  # 稀疏向量模型路径
     markdown_folder_path="../raw_data",
-    collection_name="knowledge_base_v2",
-    max_tokens_per_batch=2048,
-    milvus_host="localhost",
-    milvus_port=19530
+    collection_name="knowledge_base_v3",
+    max_tokens_per_batch=2048
 )
 ```
 
 ### build_knowledge_base函数参数说明
 
-| 参数名 | 默认值 | 说明 |
-|--------|--------|------|
+| 参数名 | 默认值                                   | 说明 |
+|--------|---------------------------------------|------|
 | embedding_model_path | "../models/Qwen/Qwen3-Embedding-0.6B" | 密集嵌入模型路径 |
-| sparse_model_path | "BAAI/bge-m3" | 稀疏嵌入模型路径 |
-| markdown_folder_path | "../raw_data" | Markdown文件夹路径 |
-| collection_name | "knowledge_base_v2" | Milvus集合名 |
-| max_tokens_per_batch | 2048 | 批量存入数据库的批token数量上限 |
-| min_chunk_size | 256 | 最小块大小 |
-| core_chunk_size | 512 | 核心块大小 |
-| max_chunk_size | 2048 | 最大块大小 |
-| milvus_host | 从环境变量读取 | Milvus主机地址 |
-| milvus_port | 从环境变量读取 | Milvus端口 |
-| milvus_user | 从环境变量读取 | Milvus用户名 |
-| milvus_password | 从环境变量读取 | Milvus密码 |
-| index_type | "FLAT" | 索引类型 |
-| metric_type | "COSINE" | 度量类型 |
+| sparse_model_path | "BAAI/bge-m3"                         | 稀疏嵌入模型路径 |
+| markdown_folder_path | "../raw_data"                         | Markdown文件夹路径 |
+| collection_name | "knowledge_base_v3"                   | Milvus集合名 |
+| max_tokens_per_batch | 2048                                  | 批量存入数据库的批token数量上限 |
+| min_chunk_size | 256                                   | 最小块大小 |
+| core_chunk_size | 512                                   | 核心块大小 |
+| max_chunk_size | 2048                                  | 最大块大小 |
+| milvus_host | 从环境变量读取                               | Milvus主机地址 |
+| milvus_port | 从环境变量读取                               | Milvus端口 |
+| milvus_user | 从环境变量读取                               | Milvus用户名 |
+| milvus_password | 从环境变量读取                               | Milvus密码 |
+| index_type | "FLAT"                                | 索引类型 |
+| metric_type | "COSINE"                              | 度量类型 |
 
 ## 配置文件
 
@@ -308,11 +307,12 @@ MCP（Model Context Protocol）服务的配置文件：
 通过`build_knowledge_base`函数参数配置：
 
 ```python
+from workflow.build_knowledge_base import build_knowledge_base
 build_knowledge_base(
     embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",  # 密集嵌入模型路径
     sparse_model_path="BAAI/bge-m3",                              # 稀疏嵌入模型路径
     markdown_folder_path="../raw_data",                           # 文档源路径
-    collection_name="knowledge_base_v2",                          # Milvus集合名称
+    collection_name="knowledge_base_v3",                          # Milvus集合名称
     max_tokens_per_batch=2048,                                    # 批处理token上限
     min_chunk_size=256,                                           # 最小文档块大小
     core_chunk_size=512,                                          # 核心文档块大小
@@ -333,7 +333,7 @@ from retriever.MilvusHybridRetriever import MilvusHybridRetriever
 # 初始化组件
 llm = get_chat_model()
 retriever = MilvusHybridRetriever.from_existing_index(
-    collection_name="knowledge_base_v2",
+    collection_name="knowledge_base_v3",
     embedding_field="vector",
     sparse_embedding_field="sparse_vector",
     title_sparse_field="title_sparse"
@@ -701,28 +701,37 @@ Agent的功能通过全面的测试用例进行验证：
 ### Agent工作流示例
 
 ```python
-from langgraph.graph import StateGraph, START, END
+from langchain_core.messages import HumanMessage
 from agent.graph import build_react_agent
-from agent.state import AgentState
-from utils.llm_factory import get_chat_model
-from retriever.MilvusHybridRetriever import MilvusHybridRetriever
+from informer import RuntimeBridge
+from utils.model_factory import get_chat_model, get_dense_embed_model, get_sparse_embed_model
+from retriever import MilvusHybridRetriever, GraphTraverser
 from agent.nodes.rerank_node import RerankNode
 
 # 构建ReAct Agent
 llm = get_chat_model()
+dense_ef = get_dense_embed_model("dense_embedding_model_path")
+sparse_ef = get_sparse_embed_model("sparse_embedding_model_path")
+informer = RuntimeBridge(
+    dense_embedding_func=dense_ef,
+    sparse_embedding_func=sparse_ef,
+)
 retriever = MilvusHybridRetriever.from_existing_index(
-    collection_name="knowledge_base_v2",
+    collection_name="knowledge_base_v3",
     embedding_field="vector",
     sparse_embedding_field="sparse_vector",
     title_sparse_field="title_sparse"
 )
 reranker = RerankNode(model_path="../models/Qwen/Qwen3-Reranker-0.6B")
+traverser = GraphTraverser("knowledge_base_v3")
 
 # 构建ReAct工作流
 app = build_react_agent(
     llm=llm,
+    informer=informer,
     retriever=retriever,
     reranker=reranker,
+    traverser=traverser,
     tool_descriptions="可用工具列表描述..."
 )
 
