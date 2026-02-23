@@ -15,6 +15,7 @@ __pycache__/
 **/workspace
 
 # Others
+/experiment
 /models
 /raw_data*
 /.idea
