@@ -19,6 +19,10 @@ from utils.milvus_adapter import connect_milvus_by_env, csr_to_milvus_format
 from workflow.build_knowledge_base import STATIC_PARTITION_NAME, DYNAMIC_PARTITION_NAME
 
 
+def generate_event_id(title: str) -> str:
+    """生成基于标题的唯一节点ID"""
+    return str(uuid.uuid5(uuid.NAMESPACE_OID, title))
+
 class RuntimeBridge:
     # --- 单例模式核心 ---
     _instance = None
@@ -180,29 +184,41 @@ class RuntimeBridge:
 
     def _process_single_event(self, event):
         """核心逻辑：逆向实例化 + 存储"""
-        self.logger.info(f"Processing Event: {event['reason']} on {event['name']}")
+        self.logger.info(f"Processing Event: {event['reason']} on {event['obj_kind']} {event['name']}")
 
-        # 1. 文本化 (Retrieval-oriented Textification)
+        # 1. 主动探查资源深层状态
+        detailed_state, short_state = "", ""
+        if event['obj_kind'] == "Pod":
+            detailed_state, short_state = self._fetch_pod_detailed_state(event['namespace'], event['name'])
+
+        # 2. 构造标题 (Title) 与 主键 (PK)
+        state_suffix = f" [{short_state}]" if short_state else ""
+        title = f"Alert: {event['obj_kind']} {event['name']} - {event['reason']}{state_suffix}"
+
+        # 3. 文本化 (Retrieval-oriented Textification)
         # A. 抽象文本 (用于动静对齐 & Summary)
         # 目的：去掉实体干扰，纯粹描述故障现象，以便匹配静态手册
-        abstract_text = f"故障: {event['reason']}. 日志: {event['message']}"
+        abstract_text = f"资源类型: {event['obj_kind']}. 故障: {event['reason']}. 日志: {event['message'][:300]}"
+        if detailed_state:
+            abstract_text += f". 资源状态: {detailed_state}"
 
         # B. 具体文本 (用于存储 & Agent检索)
         # 目的：包含实体名称(如payment-service)、Namespace等，以便技术摘要能搜到
         specific_text = (
             f"【运行警报】\n"
-            f"Resource: {event['namespace']}/{event['name']}\n"  # <--- 关键：包含实体名
+            f"Resource: {event['obj_kind']} {event['namespace']}/{event['name']}\n"
             f"Reason: {event['reason']}\n"
             f"Message: {event['message']}\n"
+            f"State: {detailed_state if detailed_state else 'N/A'}\n"
             f"Time: {event['timestamp_str']}"
         )
 
-        # 2. 实体映射 (Entity Mapping / Reverse Instantiation)
+        # 4. 实体映射 (Entity Mapping / Reverse Instantiation)
         align_sparse_result = self.sparse_ef.encode_queries([abstract_text])["sparse"]
         align_sparse_vec = csr_to_milvus_format(align_sparse_result)[0]
         anchor = self._find_static_anchor(align_sparse_vec)
 
-        # 3. 面向存储的向量化 (Storage-oriented Vectorization)
+        # 5. 面向存储的向量化 (Storage-oriented Vectorization)
         # A. 稠密向量 (Dense Vector)
         storage_dense_vec = self.dense_ef.embed_documents([specific_text])[0]
         summary_dense_vec = self.dense_ef.embed_documents([abstract_text])[0]
@@ -211,9 +227,10 @@ class RuntimeBridge:
         storage_sparse_result = self.sparse_ef.encode_documents([specific_text])["sparse"]
         storage_sparse_vec = csr_to_milvus_format(storage_sparse_result)[0]
 
-        # 4. 构造数据并写入动态分区 (Dynamic Storage)
+        # 6. 构造数据并写入动态分区 (Dynamic Storage)
         self._insert_to_milvus(
             event=event,
+            title=title,                    # 节点标题
             text=specific_text,             # 存具体内容
             summary=abstract_text,          # 存抽象内容
             dense_vec=storage_dense_vec,    # 存具体向量 (供 Agent 检索)
@@ -246,6 +263,7 @@ class RuntimeBridge:
     def _insert_to_milvus(
             self,
             event,
+            title: str,
             text: str,
             summary: str,
             dense_vec: list[float],
@@ -258,6 +276,7 @@ class RuntimeBridge:
 
         Args:
             event (dict): 原始事件数据
+            title (str): 事件标题 (最精简化)
             text (str): 具体文本 (包含实体名，用于 text 字段)
             summary (str): 抽象文本 (去实体化，用于 summary 字段)
             dense_vec (list): 基于 specific_text 的稠密向量 (用于 vector 字段，供 Agent 检索)
@@ -278,7 +297,7 @@ class RuntimeBridge:
         # 构造符合 Schema 的数据条目 (必须与 build_knowledge_base.py 一致)
         entry = {
             # 核心字段
-            "pk": str(uuid.uuid4()),        # 动态生成 UUID
+            "pk": generate_event_id(title),        # 动态生成 UUID
             "text": text,                   # 具体现场日志 (包含 payment-service 等实体)
             "summary": summary,             # 存储去实例化后的故障摘要
             # 向量
@@ -288,7 +307,7 @@ class RuntimeBridge:
             "summary_vector": summary_vec,  # [分析用] 纯粹的故障模式语义 (无实体干扰)
             # 元数据与动静关联
             "source": "k8s_informer",           # 数据源标记
-            "title": f"Runtime Alert: {event['reason']} - {event['name']}",
+            "title": title,
             "timestamp": event["timestamp"],
             "node_type": NodeType.EVENT.value,       # 节点类型标记 (Agent根据此字段判断是否高亮)
             "related_links": related_links,     # JSON 格式的关联链路
@@ -306,6 +325,46 @@ class RuntimeBridge:
             "entry_urls": [],               # 无外部 URL
         }
 
-        # 写入动态分区
-        self.collection.insert([entry], partition_name=self.dynamic_partition)  # <--- 关键：指定分区
-        self.logger.info(f"Inserted into {self.dynamic_partition} partition.")
+        try:
+            # 使用 upsert 保证写入动态分区数据的幂等更新
+            self.collection.upsert([entry], partition_name=self.dynamic_partition)
+            self.logger.info(f"Upserted dynamic event: {title} into {self.dynamic_partition} partition.")
+        except Exception as e:
+            self.logger.error(f"Failed to upsert dynamic event to Milvus: {e}")
+
+    def _fetch_pod_detailed_state(self, namespace: str, name: str) -> tuple[str, str]:
+        """
+        主动探查 Pod 的深层状态
+        返回: (详细状态字符串, 简短核心状态用于标题)
+        """
+        try:
+            pod = self.core_v1.read_namespaced_pod(name=name, namespace=namespace)
+            details = []
+            short_states = set()
+
+            statuses = (pod.status.container_statuses or []) + (pod.status.init_container_statuses or [])
+
+            for cs in statuses:
+                if cs.state.terminated:
+                    reason = cs.state.terminated.reason
+                    exit_code = cs.state.terminated.exit_code
+                    details.append(f"[{cs.name}] Terminated: {reason} (ExitCode: {exit_code})")
+                    short_states.add(reason)
+                elif cs.state.waiting:
+                    reason = cs.state.waiting.reason
+                    details.append(f"[{cs.name}] Waiting: {reason}")
+                    # 如果没有 terminated 状态，才把 waiting 状态加入标题
+                    if not short_states:
+                        short_states.add(reason)
+
+            detailed_state = " | ".join(details)
+            # 取出最核心的 1-2 个状态作为简短标识
+            short_state = "/".join(list(short_states)[:2])
+            return detailed_state, short_state
+        except client.ApiException as e:
+            if e.status == 404:
+                return "[Pod已删除]", "Deleted"
+            return "", ""
+        except Exception as e:
+            self.logger.debug(f"Fetch pod status error: {e}")
+            return "", ""
