@@ -2,10 +2,12 @@ import json
 import os
 import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
 import torch
+from langchain_core.documents import Document
 from pymilvus import utility, Collection, CollectionSchema, FieldSchema, DataType
 from transformers import AutoTokenizer
 
@@ -18,9 +20,7 @@ from utils.milvus_adapter import connect_milvus_by_env
 STATIC_PARTITION_NAME = "static_knowledge"
 DYNAMIC_PARTITION_NAME = "dynamic_events"
 
-# ==========================================
 # Schema 定义
-# ==========================================
 def create_hybrid_schema(dense_dim):
     """
     定义支持混合检索的 Schema
@@ -48,6 +48,7 @@ def create_hybrid_schema(dense_dim):
                     max_length=1024, description="超链接入口列表"),
         FieldSchema(name="related_links", dtype=DataType.JSON, description="解析后的关联链路"),
         FieldSchema(name="summary", dtype=DataType.VARCHAR, max_length=65535, description="摘要"),
+        FieldSchema(name="timestamp", dtype=DataType.INT64, description="Unix时间戳(秒)"),
 
         # 2. 向量字段
         # (A) Text 的稠密向量 (Qwen 生成)
@@ -64,7 +65,7 @@ def create_hybrid_schema(dense_dim):
     return schema
 
 
-def batch_by_token(documents, max_tokens_per_batch=1024):  # 例如 1024
+def batch_by_token(documents, max_tokens_per_batch=1024) -> List[List[Document]]:
     """
     根据token数量对文档进行分批
 
@@ -82,7 +83,6 @@ def batch_by_token(documents, max_tokens_per_batch=1024):  # 例如 1024
         tokens = doc.metadata.get("token_count", 0)
         if tokens > max_tokens_per_batch:  # 单个文档超限
             print(f"警告：文档 {doc.metadata.get('source')} 超过单批限制 ({tokens} tokens)")
-            # 这里可选择跳过、切分或单独处理
             batches.append([doc])  # 保守处理：单独成批
             continue
 
@@ -105,9 +105,8 @@ def resolve_links(documents: list):
     全局链接解析
     构建 URL -> Document PK 的映射，并构建 document.metadata['related_links'] (JSON)
     """
-    # 1. 构建全局注册表 (Registry)
-    # Key: 完整的 Entry URL (例如 https://...#section-1)
-    # Value: Document ID (UUID)
+    # 1. 构建全局注册表 (Registry)，建立 URL -> Doc_ID 的映射
+    # Key: 完整的 Entry URL (例如 https://...#section-1), Value: Document ID (UUID)
     url_registry = {}
 
     # 统计数据
@@ -121,8 +120,7 @@ def resolve_links(documents: list):
         doc_id = doc.id  # 确保 Document 对象有 id 属性
 
         for anchor in anchors:
-            # 注意：如果有重复的 anchor (例如不同文档声明了同一个 URL)，后遍历的会覆盖前面的
-            # 在 k8s 文档中，URL+Hash 应该是唯一的
+            # 在 k8s 文档中，URL+Hash 应该是唯一的，否则如果有重复的 anchor (例如不同文档声明了同一个 URL)，后遍历的会覆盖前面的
             url_registry[anchor] = doc_id
             total_anchors += 1
 
@@ -147,8 +145,6 @@ def resolve_links(documents: list):
 
         for anchor_text, urls in outlinks_map.items():
             for link in urls:
-                total_outlinks += 1
-
                 # 尝试查找 PK
                 target_pk = url_registry.get(link)
 
@@ -159,16 +155,16 @@ def resolve_links(documents: list):
 
                 # 构建连接对象
                 link_obj = {
-                    "text": anchor_text,  # 锚点文本 (语义)
-                    "url": link,  # 原始 URL
-                    "pk": target_pk,  # 目标文档 ID (如果存在)
-                    "type": "internal" if target_pk else "external"  # 连接类型
+                    "text": anchor_text,    # 锚点文本 (语义)
+                    "url": link,            # 原始 URL
+                    "pk": target_pk,        # 目标文档 ID (如果存在)
+                    "type": "internal" if target_pk else "external" # 连接类型
                 }
 
-                # 可选：如果你只关心内部链接，可以在这里 filter
-                # 但保留 external 链接对 Agent 也有用
+                # 可选：如果只关心内部链接，可以在这里 filter。但保留 external 链接对 Agent 也有用
                 resolved_links_data.append(link_obj)
 
+                total_outlinks += 1
                 if target_pk:
                     resolved_count += 1
 
@@ -176,7 +172,7 @@ def resolve_links(documents: list):
         doc.metadata["related_links"] = resolved_links_data
         max_outlinks = max(max_outlinks, len(resolved_links_data))
 
-    print(f"链接解析完成: 扫描 {total_outlinks} 个外链, 成功关联 {resolved_count} 个内部引用，单个文档块最多 {max_outlinks} 个链接。")
+    print(f"链接解析完成: 扫描 {total_outlinks} 个超链接, 成功关联 {resolved_count} 个内部引用，单个文档块最多 {max_outlinks} 个链接。")
 
 def build_knowledge_base(
         embedding_model_path="../models/Qwen/Qwen3-Embedding-0.6B",
@@ -203,7 +199,6 @@ def build_knowledge_base(
     print(f"Dense 向量维度: {dense_dim}")
 
     # 3. 初始化 Sparse Embedding 模型 (BGE-M3)
-    # BGE-M3 是目前生成稀疏向量(SPLADE/BM25 style)的最佳模型之一
     print(f"正在加载 Sparse 模型: {sparse_model_path}...")
     sparse_ef = get_sparse_embed_model(sparse_model_path)
 
@@ -307,6 +302,7 @@ def build_knowledge_base(
                 "merged": meta.get("merged"),
                 "nav_next_step": meta.get("nav_next_step"),
                 "nav_see_also": meta.get("nav_see_also"),
+                "timestamp": int(datetime.now().timestamp()),
                 # Graph-RAG 字段
                 "entry_urls": list(meta.get("anchors", [])),
                 "related_links": meta.get("related_links", []),
