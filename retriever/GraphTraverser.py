@@ -26,7 +26,7 @@ class GraphTraverser:
             partition_names: Optional[List[str]] = None,
             parent_decay_threshold: float = 0.75,
             absolute_min_similarity: float = 0.2,  # 防止相关性太低
-            link_proportion: float = 0.75,
+            link_proportion: float = 0.5,
             max_link_top_k: int = 10
     ):
         self.collection = Collection(milvus_collection_name, using=milvus_connection_alias)
