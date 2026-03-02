@@ -82,8 +82,18 @@ def init_agent_system():
     llm = get_chat_model(temperature=0.1, extra_body={"top_k": 50, "thinking_budget": 32768})
 
     print(">>> [9/9] 正在组装 Agent Graph...")
-    informer = RuntimeBridge(dense_embedding, sparse_embedding, COLLECTION_NAME)
-    retriever = MilvusHybridRetriever(COLLECTION_NAME, dense_embedding, sparse_embedding, top_k=5)
+    informer = RuntimeBridge(
+        dense_embedding_func=dense_embedding,
+        sparse_embedding_func=sparse_embedding,
+        collection_name=COLLECTION_NAME,
+    )
+
+    retriever = MilvusHybridRetriever(
+        collection_name=COLLECTION_NAME,
+        dense_embedding_func=dense_embedding,
+        sparse_embedding_func=sparse_embedding,
+        top_k=5
+    )
     traverser = GraphTraverser(COLLECTION_NAME, partition_names=[STATIC_PARTITION_NAME])
 
     built_app = build_react_agent(
