@@ -1,3 +1,4 @@
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph, START, END
 
 # 引入节点
@@ -26,7 +27,8 @@ def build_react_agent(
         traverser,      # 拓扑扩展器
         reranker,       # 重排器
         tool_descriptions: str,
-        config_path="config/mcp_config.json"
+        config_path="config/mcp_config.json",
+        checkpointer: BaseCheckpointSaver=None
 ):
     """
     构建图，传入 tool_descriptions 供 Planning 节点使用
@@ -98,4 +100,4 @@ def build_react_agent(
 
     workflow.add_edge(Expression, END)
 
-    return workflow.compile()
+    return workflow.compile(checkpointer=checkpointer, interrupt_before=["ToolCall"])
