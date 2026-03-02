@@ -24,3 +24,5 @@ psycopg~=3.3.2
 dataclasses~=0.8
 kubernetes~=35.0.0
 cachetools~=5.5.0
+streamlit~=1.54.0
+psycopg-pool~=3.3.0
