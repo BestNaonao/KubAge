@@ -19,7 +19,7 @@ for var in [API_KEY, BASE_URL, MODEL_NAME]:
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 
-def get_chat_model(temperature=0, max_token=16384, frequency_penalty=0, top_p=0.95, extra_body=None) -> ChatOpenAI:
+def get_chat_model(temperature=0, max_token=65536, frequency_penalty=0, top_p=0.95, extra_body=None) -> ChatOpenAI:
     """
     获取配置好的 ChatModel 实例
     """
