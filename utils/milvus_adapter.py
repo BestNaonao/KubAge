@@ -73,6 +73,9 @@ def decode_metadata_from_milvus(encoded_metadata: Dict[str, Any]) -> Dict[str, A
         else:
             # 其他字段保持不变
             decoded_metadata[key] = value
+
+        if key in ["child_ids", "entry_urls"]:
+            decoded_metadata[key] = list(value)
     
     return decoded_metadata
 
