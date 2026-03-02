@@ -28,46 +28,71 @@ DB_URI = f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWO
 
 @st.cache_resource
 def init_agent_system():
+    # 增加详细的控制台打印，方便在终端定位卡顿位置
+    print("\n" + "=" * 50)
+    print(">>> 🚀 开始初始化 Agent 核心系统 (由于加载大模型，可能需要几分钟)...")
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    print(">>> [1/9] 正在连接 Milvus 向量数据库...")
     connect_milvus_by_env()
 
-    # 🌟 2. 初始化 PostgreSQL 连接池与持久化组件
-    pool = AsyncConnectionPool(
-        conninfo=DB_URI,
-        max_size=20,
-        kwargs={"autocommit": True, "prepare_threshold": 0},
-    )
-    checkpointer = AsyncPostgresSaver(pool)
+    # 🌟 将数据库和 MCP 等异步操作封装在一个 async 函数中，安全调度
+    async def _async_init():
+        print(">>> [2/9] 正在初始化 PostgreSQL 异步连接池...")
+        # 注意：必须加 open=False，避免在同步上下文中强制开启导致死锁
+        conn_pool = AsyncConnectionPool(
+            conninfo=DB_URI,
+            max_size=20,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+            open=False
+        )
+        await conn_pool.open()  # 手动在异步上下文中打开连接
 
-    # 🌟 3. 自动建表：如果 KubAge 数据库中还没有 checkpoint 相关的表，会自动创建
-    loop.run_until_complete(checkpointer.setup())
+        print(">>> [3/9] 正在设置 PostgreSQL 检查点持久化表...")
+        pg_checkpointer = AsyncPostgresSaver(conn_pool)
+        await pg_checkpointer.setup()
 
-    # 初始化其他模型与组件 (路径根据实际情况保留)
+        print(">>> [4/9] 正在初始化 MCP Manager 与 Kubernetes 沙箱...")
+        mcp_manager = MCPToolManager.get_instance()
+        await mcp_manager.initialize(config_path="config/mcp_config.json")
+        tool_string = mcp_manager.get_tools_description()
+
+        return conn_pool, pg_checkpointer, tool_string
+
+    # 执行所有异步初始化任务
+    pool, checkpointer, tool_str = loop.run_until_complete(_async_init())
+
     DENSE_MODEL_PATH = "models/Qwen/Qwen3-Embedding-0.6B"
     SPARSE_MODEL_PATH = "BAAI/bge-m3"
     RERANKER_MODEL_PATH = "models/Qwen/Qwen3-Reranker-0.6B"
     COLLECTION_NAME = "knowledge_base_v3"
 
-    mcp_manager = MCPToolManager.get_instance()
-    loop.run_until_complete(mcp_manager.initialize(config_path="config/mcp_config.json"))
-    tool_str = mcp_manager.get_tools_description()
-
+    print(f">>> [5/9] 正在加载 Dense Embedding 模型 ({DENSE_MODEL_PATH})...")
     dense_embedding = get_dense_embed_model(DENSE_MODEL_PATH)
+
+    print(f">>> [6/9] 正在加载 Sparse Embedding 模型 ({SPARSE_MODEL_PATH})...")
     sparse_embedding = get_sparse_embed_model(SPARSE_MODEL_PATH)
+
+    print(f">>> [7/9] 正在加载 Reranker 重排模型 ({RERANKER_MODEL_PATH})...")
+    reranker = RerankNode(RERANKER_MODEL_PATH, top_n=5)
+
+    print(">>> [8/9] 正在加载 LLM 大语言模型...")
     llm = get_chat_model(temperature=0.1, extra_body={"top_k": 50, "thinking_budget": 32768})
 
+    print(">>> [9/9] 正在组装 Agent Graph...")
     informer = RuntimeBridge(dense_embedding, sparse_embedding, COLLECTION_NAME)
     retriever = MilvusHybridRetriever(COLLECTION_NAME, dense_embedding, sparse_embedding, top_k=5)
     traverser = GraphTraverser(COLLECTION_NAME, partition_names=[STATIC_PARTITION_NAME])
-    reranker = RerankNode(RERANKER_MODEL_PATH, top_n=5)
 
-    # 🌟 4. 传入 checkpointer 构建 Agent
     built_app = build_react_agent(
         llm, informer, retriever, traverser, reranker, tool_str,
         checkpointer=checkpointer
     )
+
+    print(">>> ✅ Agent 系统初始化完成！")
+    print("=" * 50 + "\n")
 
     return built_app, loop
 
