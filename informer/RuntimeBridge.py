@@ -124,8 +124,8 @@ class RuntimeBridge:
         while True:
             try:
                 self.logger.info("Watching K8s Events...")
-                kwargs = {"timeout_seconds": 90, "resource_version": resource_version} if resource_version \
-                    else {"timeout_seconds": 90}
+                kwargs = {"timeout_seconds": 600, "resource_version": resource_version} if resource_version \
+                    else {"timeout_seconds": 600}
                 for event in w.stream(self.core_v1.list_event_for_all_namespaces, **kwargs):
                     obj: CoreV1Event = event["object"]
                     resource_version = obj.metadata.resource_version
