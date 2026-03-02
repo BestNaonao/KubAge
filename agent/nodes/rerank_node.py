@@ -29,7 +29,7 @@ You must answer with exactly one word: yes or no."""
 
 
 class RerankNode:
-    def __init__(self, model_path: str, top_n: int = 5, max_length: int = 16384):
+    def __init__(self, model_path: str, top_n: int = 5, max_length: int = 8192):
         """
         初始化 Qwen3-Reranker (CausalLM 模式)
         """
@@ -129,7 +129,7 @@ class RerankNode:
 
         return f"<Instruct>: {dynamic_instruction}\n<Query>: {query}\n<Document>: {enriched_doc}"
 
-    def _compute_scores(self, pairs: List[str], token_budget: int = 16384) -> List[float]:
+    def _compute_scores(self, pairs: List[str], token_budget: int = 8192) -> List[float]:
         """
         基于 Token Budget 的动态分批推理
         :param pairs: 输入的文本对列表
