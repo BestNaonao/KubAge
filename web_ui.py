@@ -4,8 +4,9 @@ import uuid
 
 import streamlit as st
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from psycopg_pool import AsyncConnectionPool
 
 from agent.graph import build_react_agent
@@ -51,7 +52,8 @@ def init_agent_system():
         await conn_pool.open()  # 手动在异步上下文中打开连接
 
         print(">>> [3/9] 正在设置 PostgreSQL 检查点持久化表...")
-        pg_checkpointer = AsyncPostgresSaver(conn_pool)
+        serializer = JsonPlusSerializer(pickle_fallback=True)
+        pg_checkpointer = AsyncPostgresSaver(conn_pool, serde=serializer)
         await pg_checkpointer.setup()
 
         print(">>> [4/9] 正在初始化 MCP Manager 与 Kubernetes 沙箱...")
@@ -124,6 +126,7 @@ for msg in st.session_state.messages:
 
 
 # --- 核心交互逻辑 ---
+# --- 核心交互逻辑 ---
 def run_agent_step(user_input=None, feedback=None):
     """步进运行 Agent，处理正常输入或 HITL 反馈"""
     if user_input:
@@ -138,55 +141,66 @@ def run_agent_step(user_input=None, feedback=None):
     status_container = st.status("🚀 KubAge 工作流执行中...", expanded=True)
 
     async def _stream():
-        # 根据是否有新输入决定是调用 ainvoke 还是单纯继续 astream
         streamer = app.astream(inputs, config, stream_mode="values") if inputs else app.astream(None, config,
                                                                                                 stream_mode="values")
+
+        # 🌟 修复 1：利用 reasoning 作为指纹进行状态去重
+        rendered_flags = {"analysis": None, "plan": None, "evaluation": None}
+
         async for event in streamer:
-            # 获取最新状态进行可视化渲染
             state = event
 
             # 推理流展示: Analysis
             if "analysis" in state and state["analysis"]:
                 analysis = state["analysis"]
-                with status_container:
-                    st.markdown(
-                        f"**🧠 意图分析 (Analysis)**\n* **技术摘要**: {analysis.technical_summary}\n* **风险等级**: `{analysis.risk_level}`\n* **推理过程**: {analysis.reasoning}")
+                if rendered_flags["analysis"] != analysis.reasoning:
+                    rendered_flags["analysis"] = analysis.reasoning
+                    with status_container:
+                        st.markdown(
+                            f"**🧠 意图分析 (Analysis)**\n* **技术摘要**: {analysis.technical_summary}\n* **风险等级**: `{analysis.risk_level.value}`\n* **推理过程**: {analysis.reasoning}")
 
             # 推理流展示: Planning
             if "plan" in state and state["plan"]:
-                plan = state["plan"]
-                with status_container:
-                    st.markdown(
-                        f"**📝 规划动作 (Planning)**\n* **Action**: `{plan.action}`\n* **推理**: {plan.reasoning}")
+                curr_plan = state["plan"]
+                if rendered_flags["plan"] != curr_plan.reasoning:
+                    rendered_flags["plan"] = curr_plan.reasoning
+                    with status_container:
+                        st.markdown(
+                            f"**📝 规划动作 (Planning)**\n* **Action**: `{curr_plan.action.value}`\n* **推理**: {curr_plan.reasoning}")
 
             # 反思流展示: Regulation
             if "evaluation" in state and state["evaluation"]:
                 eval_obj = state["evaluation"]
-                with status_container:
-                    if eval_obj.status.value == "Fail" or eval_obj.status.value == "Needs Refinement":
-                        st.error(
-                            f"**⚖️ 自我反思 (Regulation)**\n* **状态**: {eval_obj.status.value}\n* **反馈**: {eval_obj.feedback}\n* **经验总结**: {eval_obj.reflection}")
-                    else:
-                        st.success(f"**⚖️ 评估通过**: {eval_obj.feedback}")
+                if rendered_flags["evaluation"] != eval_obj.reasoning:
+                    rendered_flags["evaluation"] = eval_obj.reasoning
+                    with status_container:
+                        if eval_obj.status.value in ["Fail", "Needs Refinement"]:
+                            st.error(
+                                f"**⚖️ 自我反思 (Regulation)**\n* **状态**: {eval_obj.status.value}\n* **反馈**: {eval_obj.feedback}")
+                        else:
+                            st.success(f"**⚖️ 评估通过**: {eval_obj.feedback}")
 
-            # 生成最终回答: Expression
-            if "generated_response" in state:
-                return state["generated_response"]
+        # 🌟 修复 2：循环安全结束后，使用原生异步方法获取最新状态
+        return await app.aget_state(config)
 
-    final_reply = async_loop.run_until_complete(_stream())
+    # 执行事件循环获取最终状态
+    curr_state = async_loop.run_until_complete(_stream())
     status_container.update(label="✅ 工作流执行完毕", state="complete", expanded=False)
 
-    # 检查是否触发了断点 (HITL)
-    curr_state = app.get_state(config)
-    if curr_state.next and "ToolCall" in curr_state.next:
+    # 🌟 检查是否触发了断点 (HITL)
+    if curr_state and curr_state.next and "ToolCall" in curr_state.next:
         st.warning("⚠️ **执行面隔离拦截**: 即将调用破坏性工具，系统已自动挂起执行流。等待人工审批。")
         st.session_state.awaiting_approval = True
-        st.rerun()
-
-    if final_reply:
-        st.session_state.messages.append({"role": "assistant", "content": final_reply})
-        with st.chat_message("assistant"):
-            st.markdown(final_reply)
+        st.rerun()  # 触发页面重载以显示底部表单
+    else:
+        # 如果没有挂起，说明对话彻底完成，提取最后一条 AIMessage 作为最终回答
+        if curr_state and "messages" in curr_state.values:
+            last_msg = curr_state.values["messages"][-1]
+            if isinstance(last_msg, AIMessage) and last_msg.content and not last_msg.tool_calls:
+                final_reply = last_msg.content
+                st.session_state.messages.append({"role": "assistant", "content": final_reply})
+                with st.chat_message("assistant"):
+                    st.markdown(final_reply)
 
 
 # --- 接收用户输入 ---
@@ -198,21 +212,23 @@ if prompt := st.chat_input("描述您的 Kubernetes 运维需求..."):
 
 # --- 人在回路 (HITL) 审批面板 ---
 if st.session_state.get("awaiting_approval", False):
-    current_state = app.get_state(config)
+    # 🌟 修复 3：在审批界面也必须使用异步方法获取状态
+    current_state = async_loop.run_until_complete(app.aget_state(config))
     plan = current_state.values.get("plan")
 
-    with st.form("hitl_form"):
-        st.subheader("🛡️ 人工审批沙箱")
-        st.info(f"**请求调用工具**: `{plan.tool_name}`\n\n**执行参数**: {plan.tool_args}")
-        feedback_input = st.text_input("驳回附加指导 (可选，如: '只重启 Pod，不要删除')")
+    if plan:
+        with st.form("hitl_form"):
+            st.subheader("🛡️ 人工审批沙箱")
+            st.info(f"**请求调用工具**: `{plan.tool_name}`\n\n**执行参数**: {plan.tool_args}")
+            feedback_input = st.text_input("驳回附加指导 (可选，如: '只重启 Pod，不要删除')")
 
-        col1, col2 = st.columns(2)
-        approved = col1.form_submit_button("✅ 批准执行", type="primary")
-        rejected = col2.form_submit_button("❌ 驳回并重新规划")
+            col1, col2 = st.columns(2)
+            approved = col1.form_submit_button("✅ 批准执行", type="primary")
+            rejected = col2.form_submit_button("❌ 驳回并重新规划")
 
-        if approved:
-            st.session_state.awaiting_approval = False
-            run_agent_step()  # 继续流转
-        elif rejected:
-            st.session_state.awaiting_approval = False
-            run_agent_step(feedback=feedback_input)  # 注入指导并继续
+            if approved:
+                st.session_state.awaiting_approval = False
+                run_agent_step()  # 传入 None 恢复执行
+            elif rejected:
+                st.session_state.awaiting_approval = False
+                run_agent_step(feedback=feedback_input)  # 注入指导强行路由回 Planning
