@@ -368,3 +368,145 @@ class RuntimeBridge:
         except Exception as e:
             self.logger.debug(f"Fetch pod status error: {e}")
             return "", ""
+
+    def _resource_watcher(self, list_func, resource_type):
+        """通用的资源监听器"""
+        w = watch.Watch()
+        self.logger.info(f"Started watching resource: {resource_type}")
+
+        while True:
+            try:
+                # 监听资源变更 (ADDED, MODIFIED, DELETED)
+                for event in w.stream(list_func):
+                    obj = event['object']
+                    event_type = event['type']
+
+                    # 提取关键拓扑信息
+                    topology_data = {
+                        "kind": "ResourceChange",
+                        "change_type": event_type,  # ADDED, MODIFIED, DELETED
+                        "obj_kind": obj.kind,
+                        "name": obj.metadata.name,
+                        "namespace": obj.metadata.namespace,
+                        "uid": obj.metadata.uid,
+                        "owner_references": obj.metadata.owner_references,  # <--- 关键：父节点线索
+                        "labels": obj.metadata.labels,
+                        "creation_timestamp": str(obj.metadata.creation_timestamp)
+                    }
+
+                    self.resource_queue.put(topology_data)
+            except Exception as e:
+                self.logger.error(f"Watcher Error ({resource_type}): {e}")
+                time.sleep(5)
+
+    def start_resource_watchers(self):
+        """在 start() 方法中调用此函数"""
+        # 定义需要监听的资源列表
+        watch_targets = [
+            (self.core_v1.list_pod_for_all_namespaces, "Pod"),
+            (self.app_v1.list_deployment_for_all_namespaces, "Deployment"),
+            (self.core_v1.list_service_for_all_namespaces, "Service")
+        ]
+
+        for list_func, name in watch_targets:
+            t = threading.Thread(target=self._resource_watcher, args=(list_func, name), daemon=True)
+            t.start()
+
+        # 启动消费者
+        consumer = threading.Thread(target=self._resource_processor, daemon=True)
+        consumer.start()
+
+    def _resource_processor(self):
+        while True:
+            data = self.resource_queue.get()
+            try:
+                self._process_topology_node(data)
+            finally:
+                self.resource_queue.task_done()
+
+    def _process_topology_node(self, data):
+        """
+        处理逻辑：将资源变更转化为 Milvus 中的图节点
+        """
+        # 1. 解析父节点 (Parent Resolution)
+        parent_uid = ""
+        parent_kind = ""
+
+        # K8s 中，OwnerReferences 列表可能包含多个，通常取第一个 Controller=True 的
+        if data['owner_references']:
+            controller_ref = next((ref for ref in data['owner_references'] if ref.controller),
+                                  data['owner_references'][0])
+            parent_uid = controller_ref.uid
+            parent_kind = controller_ref.kind
+            # 注意：如果父节点是 ReplicaSet，通常我们想直接挂到 Deployment 下，
+            # 这里可以在内存中维护一个 RS -> Deployment 的缓存表来做“跳级”处理，或者直接存 RS。
+            # 为了简化，这里先直接存 K8s 原生层级。
+
+        # 2. 构造文本描述 (Textification)
+        # 相比 Event，资源的描述更侧重于配置和状态
+        action_desc = {
+            "ADDED": "已上线/部署",
+            "MODIFIED": "配置变更/状态更新",
+            "DELETED": "已下线/删除"
+        }
+
+        specific_text = (
+            f"【资源拓扑变更】\n"
+            f"Resource: {data['obj_kind']}/{data['name']}\n"
+            f"Namespace: {data['namespace']}\n"
+            f"Action: {action_desc.get(data['change_type'], data['change_type'])}\n"
+            f"Parent: {parent_kind} (UID: {parent_uid})\n"
+        )
+
+        abstract_text = f"{data['obj_kind']} {action_desc.get(data['change_type'])} in {data['namespace']}"
+
+        # 3. 向量化 (Vectorization)
+        # ... (使用与 Event 相同的 embedding 逻辑) ...
+        dense_vec = self.dense_ef.embed_documents([specific_text])[0]
+        sparse_vec = csr_to_milvus_format(self.sparse_ef.encode_documents([specific_text])["sparse"])[0]
+
+        # 4. 构造 Milvus Entry (适配你的 Schema)
+        entry = {
+            # 这里建议直接使用 K8s UID 作为 PK，或者建立映射。
+            # 如果使用 UUID，需要另外字段存储 k8s_uid 以便后续更新时能找到旧记录。
+            "pk": str(uuid.uuid4()),
+
+            "text": specific_text,
+            "summary": abstract_text,
+
+            "vector": dense_vec,
+            "sparse_vector": sparse_vec,
+            "summary_vector": [],  # 可选
+            "title_sparse": sparse_vec,
+
+            # --- 拓扑核心字段 ---
+            "node_type": NodeType.RESOURCE.value,  # 需要在 Enum 中定义 RESOURCE
+            "parent_id": parent_uid,  # 指向父资源 (如 ReplicaSet UID)
+            "source": "k8s_topology",
+            "title": f"Resource: {data['name']} ({data['obj_kind']})",
+
+            # 可以利用 related_links 存储更多拓扑元数据
+            "related_links": [
+                {
+                    "type": "k8s_owner",
+                    "id": parent_uid,
+                    "kind": parent_kind
+                }
+            ],
+
+            # 其他必填字段
+            "child_ids": [],
+            "level": 1,  # 可以根据 Kind 动态计算 (Deployment=1, RS=2, Pod=3)
+            "nav_next_step": "",
+            "entry_urls": [],
+            "token_count": len(specific_text)
+        }
+
+        # 5. 写入 Milvus
+        # 注意：如果是 DELETED 事件，逻辑应该是从 Milvus 删除对应节点，或者标记为 "Archived"
+        if data['change_type'] == "DELETED":
+            self.logger.info(f"Resource deleted: {data['name']}, logic to delete from Milvus or Mark Archived.")
+            # self.collection.delete(expr=f"k8s_uid == '{data['uid']}'") # 需 Schema 支持 k8s_uid
+        else:
+            self.collection.insert([entry], partition_name=self.dynamic_partition)
+            self.logger.info(f"Topology Node Updated: {data['name']} -> Parent: {parent_uid}")
